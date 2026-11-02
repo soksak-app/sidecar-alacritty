@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-18: sidecar는 records kit 0.0.6을 쓴다.
 - S1-16: service의 시작 기록과 stall dump는 sidecar를 `alacritty`로 적는다.
 - S1-15: `make test`는 diagnostics build의 frame test를 모두 실행한다.
 - S1-14: `make frame-benchmark`는 빌드한 service의 CPU 시간과 footprint를 잰다.

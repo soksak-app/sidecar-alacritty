@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-18: The sidecar uses the records kit 0.0.6.
 - S1-16: The start record and the stall dump of the service name the sidecar `alacritty`.
 - S1-15: `make test` runs every frame test of the diagnostics build.
 - S1-14: `make frame-benchmark` measures the CPU time and the footprint of a built service.
