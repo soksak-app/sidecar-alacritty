@@ -3,7 +3,6 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreText/CoreText.h>
 #import <ImageIO/ImageIO.h>
-#import <Metal/Metal.h>
 #include "frame.h"
 #include <stdio.h>
 #include <string.h>
@@ -19,29 +18,23 @@ typedef struct {
     IOSurfaceRef surface;
     uint32_t id;
     uint8_t nonce[16];
-    // The Metal texture over the surface of a GPU frame (a retained id<MTLTexture>), or NULL.
-    void *texture;
     uint8_t held;
 } FrameTarget;
 
 struct Frame {
-    // The target that the last draw drew into: its surface, identifier, nonce and texture. The targets own these values.
+    // The target that the last draw drew into: its surface, identifier and nonce. The targets own these values.
     IOSurfaceRef surface;
     uint32_t surface_id;
     uint8_t nonce[16];
     uint32_t width;
     uint32_t height;
-    // The Metal texture over the surface of a GPU frame (a retained id<MTLTexture>), or NULL for a frame that CoreGraphics draws.
-    void *texture;
-    // The strips of a GPU frame: a surface of the frame size that holds row r at the rows of row r, its Metal texture, the
+    // The strips of a strip frame: a surface of the frame size that holds row r at the rows of row r, the
     // serialized cells of each row as it was drawn (a retained NSMutableArray of NSData) and the configuration they were
     // drawn with (a retained NSData), and the count of strips that the last draw drew.
     IOSurfaceRef strips;
-    void *strip_texture;
-    // The overlay of a GPU frame: a surface of the frame size into which the CoreGraphics draw composites the inline
-    // images over a copy of the strip pixels under them, and its Metal texture.
+    // The overlay of a strip frame: a surface of the frame size into which the CoreGraphics draw composites the inline
+    // images over a copy of the strip pixels under them.
     IOSurfaceRef overlay;
-    void *overlay_texture;
     void *rows;
     void *configuration;
     uint32_t strips_drawn;
@@ -105,10 +98,8 @@ static void store_cell_bounds(RenderCell *cell, CGRect bounds) {
 #endif
 
 // 주어진 pixel 크기로 frame 을 만든다
-// Creates the frame and its surface. A GPU frame aligns the rows of the surface as Metal requires for a render target.
-// Creates a global BGRA surface in sRGB that carries its nonce as the soksak.frame property. A GPU surface aligns its rows
-// as Metal requires for a render target.
-static IOSurfaceRef surface_create(uint32_t width_px, uint32_t height_px, int gpu, uint8_t nonce[16]) {
+// Creates a global BGRA surface in sRGB that carries its nonce as the soksak.frame property.
+static IOSurfaceRef surface_create(uint32_t width_px, uint32_t height_px, uint8_t nonce[16]) {
     // BGRA 형식 코드: 0x42475241
     NSDictionary *properties = @{
         (id)kIOSurfaceWidth: @(width_px),
@@ -121,11 +112,6 @@ static IOSurfaceRef surface_create(uint32_t width_px, uint32_t height_px, int gp
         (id)kIOSurfaceIsGlobal: @YES,
 #pragma clang diagnostic pop
     };
-    if (gpu) {
-        NSMutableDictionary *aligned = [properties mutableCopy];
-        aligned[(id)kIOSurfaceBytesPerRow] = @(IOSurfaceAlignProperty(kIOSurfaceBytesPerRow, (size_t)width_px * 4));
-        properties = aligned;
-    }
     IOSurfaceRef surface = IOSurfaceCreate((CFDictionaryRef)properties);
     if (!surface) return NULL;
 
@@ -153,10 +139,9 @@ static void frame_use_target(Frame *frame, uint32_t index) {
     frame->surface = target->surface;
     frame->surface_id = target->id;
     memcpy(frame->nonce, target->nonce, 16);
-    frame->texture = target->texture;
 }
 
-static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
+static Frame* frame_create(uint32_t width_px, uint32_t height_px) {
     Frame *frame = calloc(1, sizeof(Frame));
     if (!frame) return NULL;
     frame->width = width_px;
@@ -167,7 +152,7 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
         return NULL;
     }
     FrameTarget *target = &frame->targets[0];
-    target->surface = surface_create(width_px, height_px, gpu, target->nonce);
+    target->surface = surface_create(width_px, height_px, target->nonce);
     if (!target->surface) {
         free(frame->targets);
         free(frame);
@@ -180,158 +165,55 @@ static Frame* frame_create(uint32_t width_px, uint32_t height_px, int gpu) {
 }
 
 Frame* frame_new(uint32_t width_px, uint32_t height_px) {
-    return frame_create(width_px, height_px, 0);
+    return frame_create(width_px, height_px);
 }
 
-// The Metal state of the process: one device, one queue and the two pipelines that fill rectangles.
-// A fill replaces the pixels with its color; a difference fill computes one minus the pixel, as kCGBlendModeDifference does with white.
-typedef struct {
-    float bounds[4];
-    float color[4];
-} GpuRect;
-
-static NSString *const gpu_shader_source =
-    @"#include <metal_stdlib>\n"
-     "using namespace metal;\n"
-     "struct Rect { float4 bounds; float4 color; };\n"
-     "struct Fragment { float4 position [[position]]; float4 color; };\n"
-     "vertex Fragment rect_vertex(uint vertex_id [[vertex_id]], uint instance_id [[instance_id]],\n"
-     "                            constant Rect *rects [[buffer(0)]], constant float2 &size [[buffer(1)]]) {\n"
-     "    Rect rect = rects[instance_id];\n"
-     "    float2 point = rect.bounds.xy + float2(vertex_id & 1, vertex_id >> 1) * rect.bounds.zw;\n"
-     "    Fragment out;\n"
-     "    out.position = float4(point.x / size.x * 2.0 - 1.0, 1.0 - point.y / size.y * 2.0, 0.0, 1.0);\n"
-     "    out.color = rect.color;\n"
-     "    return out;\n"
-     "}\n"
-     "fragment float4 rect_fragment(Fragment in [[stage_in]]) { return in.color; }\n";
-
-static id<MTLDevice> gpu_device;
-static id<MTLCommandQueue> gpu_queue;
-static id<MTLRenderPipelineState> gpu_fill;
-static id<MTLRenderPipelineState> gpu_difference;
-static char gpu_error[256];
-
-static void gpu_fail(NSString *what, NSError *error) {
-    snprintf(gpu_error, sizeof(gpu_error), "%s%s%s", what.UTF8String, error ? ": " : "",
-             error ? error.localizedDescription.UTF8String : "");
-}
-
-static int gpu_prepare(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-        if (!device) {
-            gpu_fail(@"the system has no Metal device", nil);
-            return;
-        }
-        NSError *error = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:gpu_shader_source options:nil error:&error];
-        if (!library) {
-            gpu_fail(@"the frame shaders do not compile", error);
-            return;
-        }
-        MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
-        descriptor.vertexFunction = [library newFunctionWithName:@"rect_vertex"];
-        descriptor.fragmentFunction = [library newFunctionWithName:@"rect_fragment"];
-        descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-        id<MTLRenderPipelineState> fill = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-        if (!fill) {
-            gpu_fail(@"the fill pipeline is refused", error);
-            return;
-        }
-        MTLRenderPipelineColorAttachmentDescriptor *attachment = descriptor.colorAttachments[0];
-        attachment.blendingEnabled = YES;
-        attachment.rgbBlendOperation = MTLBlendOperationAdd;
-        attachment.sourceRGBBlendFactor = MTLBlendFactorOneMinusDestinationColor;
-        attachment.destinationRGBBlendFactor = MTLBlendFactorZero;
-        attachment.alphaBlendOperation = MTLBlendOperationAdd;
-        attachment.sourceAlphaBlendFactor = MTLBlendFactorOne;
-        attachment.destinationAlphaBlendFactor = MTLBlendFactorZero;
-        id<MTLRenderPipelineState> difference = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-        if (!difference) {
-            gpu_fail(@"the difference pipeline is refused", error);
-            return;
-        }
-        id<MTLCommandQueue> queue = [device newCommandQueue];
-        if (!queue) {
-            gpu_fail(@"the Metal device gives no command queue", nil);
-            return;
-        }
-        gpu_device = device;
-        gpu_fill = fill;
-        gpu_difference = difference;
-        gpu_queue = queue;
-    });
-    return gpu_queue ? 0 : -1;
-}
-
-const char *frame_gpu_error(void) {
-    return gpu_error;
-}
-
-Frame* frame_new_gpu(uint32_t width_px, uint32_t height_px) {
-    if (gpu_prepare() != 0) return NULL;
-    Frame *frame = frame_create(width_px, height_px, 1);
-    if (!frame) {
-        gpu_fail(@"the surface of the frame is not created", nil);
-        return NULL;
-    }
-    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                          width:width_px
-                                                                                         height:height_px
-                                                                                      mipmapped:NO];
-    descriptor.usage = MTLTextureUsageRenderTarget;
-    id<MTLTexture> texture = [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->surface plane:0];
-    if (!texture) {
-        gpu_fail(@"Metal gives no texture over the surface of the frame", nil);
-        frame_drop(frame);
-        return NULL;
-    }
-    frame->targets[0].texture = (__bridge_retained void *)texture;
-    frame_use_target(frame, 0);
+// Creates a frame that keeps a strip per screen row and composes each draw on the CPU. A GPU pass is not used: its only work
+// is this copy and the rectangles of the cursor and the images, and the Metal driver keeps at least 70 MB for a process
+// that encodes any pass, while the copy costs less than a millisecond per frame (S1-13).
+Frame* frame_new_strip(uint32_t width_px, uint32_t height_px) {
+    Frame *frame = frame_create(width_px, height_px);
+    if (!frame) return NULL;
     uint8_t unused_nonce[16];
-    frame->strips = surface_create(width_px, height_px, 1, unused_nonce);
-    frame->overlay = surface_create(width_px, height_px, 1, unused_nonce);
-    id<MTLTexture> strip_texture = frame->strips ? [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->strips plane:0] : nil;
-    id<MTLTexture> overlay_texture = frame->overlay ? [gpu_device newTextureWithDescriptor:descriptor iosurface:frame->overlay plane:0] : nil;
-    if (!strip_texture || !overlay_texture) {
-        gpu_fail(@"Metal gives no texture over the strip or overlay surface of the frame", nil);
+    frame->strips = surface_create(width_px, height_px, unused_nonce);
+    frame->overlay = surface_create(width_px, height_px, unused_nonce);
+    if (!frame->strips || !frame->overlay) {
         frame_drop(frame);
         return NULL;
     }
-    frame->strip_texture = (__bridge_retained void *)strip_texture;
-    frame->overlay_texture = (__bridge_retained void *)overlay_texture;
     frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
 }
 
-static void gpu_rgb(float out[4], const uint8_t rgb[3]) {
-    out[0] = rgb[0] / 255.0f;
-    out[1] = rgb[1] / 255.0f;
-    out[2] = rgb[2] / 255.0f;
-    out[3] = 1.0f;
-}
+// A rectangle of pixels that a draw changes over the strips, in the order of the array: the overlay under an image, the
+// color of a fill, or one minus the pixel for a difference fill, as kCGBlendModeDifference with white gives.
+typedef enum { COMPOSE_OVERLAY, COMPOSE_FILL, COMPOSE_DIFFERENCE } ComposeKind;
 
-// Appends a rectangle given in the bottom-left coordinates of the CoreGraphics draw, so both draws compute the same rectangles.
-static void gpu_append(NSMutableData *rects, const Frame *frame, CGRect rect, const uint8_t rgb[3]) {
-    GpuRect item = {{(float)rect.origin.x, (float)((CGFloat)frame->height - rect.origin.y - rect.size.height),
-                     (float)rect.size.width, (float)rect.size.height}, {0}};
-    gpu_rgb(item.color, rgb);
+typedef struct {
+    uint32_t left;
+    uint32_t top;
+    uint32_t right;
+    uint32_t bottom;
+    uint8_t bgr[3];
+    ComposeKind kind;
+} ComposeRect;
+
+// Appends a rectangle given in the bottom-left coordinates of the CoreGraphics draw. It covers the pixels whose centers it
+// contains, on its left and top edges but not on its right and bottom edges, and is clamped to the frame.
+static void compose_append(NSMutableData *rects, const Frame *frame, CGRect rect, const uint8_t rgb[3], ComposeKind kind) {
+    CGFloat top = (CGFloat)frame->height - rect.origin.y - rect.size.height;
+    ComposeRect item = {
+        .left = (uint32_t)MAX(ceil(rect.origin.x - 0.5), 0.0),
+        .top = (uint32_t)MAX(ceil(top - 0.5), 0.0),
+        .right = (uint32_t)MIN(MAX(ceil(rect.origin.x + rect.size.width - 0.5), 0.0), (CGFloat)frame->width),
+        .bottom = (uint32_t)MIN(MAX(ceil(top + rect.size.height - 0.5), 0.0), (CGFloat)frame->height),
+        .bgr = {rgb[2], rgb[1], rgb[0]},
+        .kind = kind,
+    };
     [rects appendBytes:&item length:sizeof(item)];
 }
 
-static void gpu_encode(id<MTLRenderCommandEncoder> encoder, id<MTLRenderPipelineState> pipeline, NSData *rects, const float size[2]) {
-    NSUInteger count = rects.length / sizeof(GpuRect);
-    if (count == 0) return;
-    id<MTLBuffer> buffer = [gpu_device newBufferWithBytes:rects.bytes length:rects.length options:MTLResourceStorageModeShared];
-    [encoder setRenderPipelineState:pipeline];
-    [encoder setVertexBuffer:buffer offset:0 atIndex:0];
-    [encoder setVertexBytes:size length:sizeof(float) * 2 atIndex:1];
-    [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4 instanceCount:count];
-}
-
-static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
+static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output);
 
 // Decodes an inline image and gives the size at which the frame draws it, or returns NULL when the data is missing, does
@@ -383,7 +265,7 @@ int frame_draw(Frame *frame, Screen *screen, Metrics *metrics) {
 
 // Draws the screen with CoreGraphics into the surface, which has the size of the frame. Without a row selection it draws
 // the whole frame: the background, every cell, the inline images and the cursor. With a selection (one flag per screen row)
-// it draws only the selected rows, each from a fill of its row box with the default background, as the strips of a GPU
+// it draws only the selected rows, each from a fill of its row box with the default background, as the strips of a strip
 // frame; the frame then draws the images and the cursor itself.
 static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Metrics *metrics,
                          InlineImageRaster *images, uint32_t image_count,
@@ -486,7 +368,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
         render_output->underline_thickness = CTFontGetUnderlineThickness(font);
     }
 #endif
-    // Each row is clipped to its row box, so ink that extends above or below its row stays in that row; the GPU frame
+    // Each row is clipped to its row box, so ink that extends above or below its row stays in that row; the strip frame
     // draws the rows as separate strips and shows the same pixels.
     int64_t clipped_row = -1;
     // 셀을 그린다
@@ -763,7 +645,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
 
 // Composites the visible inline images into the overlay surface: it copies the strip pixels of each image rectangle into
 // the overlay, then draws every image in order with the CGContextDrawImage call of the CoreGraphics frame, and appends the
-// rectangle of each image (as an MTLRegion) to rects. An image that does not decode or fit returns -1.
+// rectangle of each image to rects. An image that does not decode or fit returns -1.
 static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t image_count, NSMutableData *rects) {
     NSMutableArray *decoded = [NSMutableArray array];
     NSMutableData *sizes = [NSMutableData data];
@@ -775,21 +657,30 @@ static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t 
         if (!image) return -1;
         [decoded addObject:(__bridge_transfer id)image];
         [sizes appendBytes:size length:sizeof(size)];
-        MTLRegion region = MTLRegionMake2D(raster->x, raster->y, (NSUInteger)ceil(size[0]), (NSUInteger)ceil(size[1]));
-        [rects appendBytes:&region length:sizeof(region)];
+        ComposeRect item = {
+            .left = raster->x,
+            .top = raster->y,
+            .right = raster->x + (uint32_t)ceil(size[0]),
+            .bottom = raster->y + (uint32_t)ceil(size[1]),
+            .kind = COMPOSE_OVERLAY,
+        };
+        [rects appendBytes:&item length:sizeof(item)];
     }
     if (decoded.count == 0) return 0;
-    IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL);
-    IOSurfaceLock(frame->overlay, 0, NULL);
+    if (IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
+    if (IOSurfaceLock(frame->overlay, 0, NULL) != kIOReturnSuccess) {
+        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+        return -1;
+    }
     const uint8_t *strip_base = IOSurfaceGetBaseAddress(frame->strips);
     uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
     size_t strip_row = IOSurfaceGetBytesPerRow(frame->strips);
     size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
     for (NSUInteger i = 0; i < decoded.count; i++) {
-        MTLRegion region = ((const MTLRegion *)rects.bytes)[i];
-        for (NSUInteger y = region.origin.y; y < region.origin.y + region.size.height; y++) {
-            memcpy(overlay_base + y * overlay_row + region.origin.x * 4, strip_base + y * strip_row + region.origin.x * 4,
-                   region.size.width * 4);
+        const ComposeRect *rect = (const ComposeRect *)rects.bytes + i;
+        for (uint32_t y = rect->top; y < rect->bottom; y++) {
+            memcpy(overlay_base + y * overlay_row + rect->left * 4, strip_base + y * strip_row + rect->left * 4,
+                   (rect->right - rect->left) * 4);
         }
     }
     IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
@@ -804,8 +695,8 @@ static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t 
     }
     for (NSUInteger i = 0; i < decoded.count; i++) {
         const CGFloat *size = (const CGFloat *)sizes.bytes + i * 2;
-        MTLRegion region = ((const MTLRegion *)rects.bytes)[i];
-        CGContextDrawImage(ctx, CGRectMake(region.origin.x, frame->height - region.origin.y - size[1], size[0], size[1]),
+        const ComposeRect *rect = (const ComposeRect *)rects.bytes + i;
+        CGContextDrawImage(ctx, CGRectMake(rect->left, frame->height - rect->top - size[1], size[0], size[1]),
                            (__bridge CGImageRef)decoded[i]);
     }
     CGContextRelease(ctx);
@@ -817,12 +708,56 @@ static void serialize_append(NSMutableData *data, const void *bytes, size_t leng
     [data appendBytes:bytes length:length];
 }
 
-// Draws the screen through Metal. The CoreGraphics cell loop draws the rows whose cells differ from the cells their strip
-// was drawn with into the strip surface; the render pass copies the strips into the frame, fills the margin below the rows
-// with the default background, copies the inline images that frame_draw_overlay composited, and draws the cursor with the
-// fills of the CoreGraphics frame. It collects no render metadata (-3), and a failed render pass returns -4 with its cause in
-// frame_gpu_error.
-static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
+// Copies the strips into the target surface and applies the rectangles. Returns -1 when a surface does not lock.
+static int frame_compose(Frame *frame, NSData *rects) {
+    if (IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
+    if (IOSurfaceLock(frame->overlay, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
+        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+        return -1;
+    }
+    if (IOSurfaceLock(frame->surface, 0, NULL) != kIOReturnSuccess) {
+        IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
+        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+        return -1;
+    }
+    const uint8_t *strip_base = IOSurfaceGetBaseAddress(frame->strips);
+    const uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
+    uint8_t *target_base = IOSurfaceGetBaseAddress(frame->surface);
+    size_t strip_row = IOSurfaceGetBytesPerRow(frame->strips);
+    size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
+    size_t target_row = IOSurfaceGetBytesPerRow(frame->surface);
+    for (uint32_t y = 0; y < frame->height; y++) {
+        memcpy(target_base + y * target_row, strip_base + y * strip_row, (size_t)frame->width * 4);
+    }
+    const ComposeRect *items = rects.bytes;
+    for (NSUInteger i = 0; i < rects.length / sizeof(ComposeRect); i++) {
+        const ComposeRect *rect = &items[i];
+        for (uint32_t y = rect->top; y < rect->bottom; y++) {
+            uint8_t *row = target_base + y * target_row;
+            if (rect->kind == COMPOSE_OVERLAY) {
+                memcpy(row + rect->left * 4, overlay_base + y * overlay_row + rect->left * 4, (rect->right - rect->left) * 4);
+                continue;
+            }
+            for (uint32_t x = rect->left; x < rect->right; x++) {
+                uint8_t *pixel = row + x * 4;
+                for (int channel = 0; channel < 3; channel++) {
+                    pixel[channel] = rect->kind == COMPOSE_FILL ? rect->bgr[channel] : 255 - pixel[channel];
+                }
+                pixel[3] = 255;
+            }
+        }
+    }
+    IOSurfaceUnlock(frame->surface, 0, NULL);
+    IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
+    IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
+    return 0;
+}
+
+// Draws the screen from strips. The CoreGraphics cell loop draws the rows whose cells differ from the cells their strip was
+// drawn with into the strip surface; frame_compose copies the strips into the target, which also fills the margin below the
+// rows with the default background, copies the inline images that frame_draw_overlay composited, and draws the cursor with
+// the fills of the CoreGraphics frame. It collects no render metadata (-3).
+static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output) {
     if (render_output) return -3;
     // A change of the frame, the font or the default colors draws every strip.
@@ -878,14 +813,12 @@ static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, Inline
     frame->strips_drawn = count;
 
     // The inline images are composited by the CoreGraphics draw over a copy of the strip pixels under them, so their
-    // pixels equal the CoreGraphics frame; the pass copies these rectangles over the strips.
-    NSMutableData *image_rects = [NSMutableData data];
+    // pixels equal the CoreGraphics frame; frame_compose copies these rectangles over the strips.
+    NSMutableData *rects = [NSMutableData data];
     if (image_count > 0) {
-        int result = frame_draw_overlay(frame, images, image_count, image_rects);
+        int result = frame_draw_overlay(frame, images, image_count, rects);
         if (result != 0) return result;
     }
-    NSMutableData *fills = [NSMutableData data];
-    NSMutableData *differences = [NSMutableData data];
     if (screen->cursor_visible && screen->cursor_blink_visible && screen->cursor_shape != 4 &&
         screen->cursor_col < screen->width && screen->cursor_row < screen->height) {
         CGFloat cursor_x = screen->cursor_col * metrics->cell_width;
@@ -894,65 +827,27 @@ static int frame_draw_gpu(Frame *frame, Screen *screen, Metrics *metrics, Inline
         CGFloat cursor_height = metrics->cell_height;
         const uint8_t *color = screen->default_cursor;
         if (screen->cursor_shape == 1) {
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, 2.0), color);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y, cursor_width, 2.0), color, COMPOSE_FILL);
         } else if (screen->cursor_shape == 2) {
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, 2.0, cursor_height), color);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y, 2.0, cursor_height), color, COMPOSE_FILL);
         } else if (screen->cursor_shape == 0) {
             const uint8_t white[3] = {255, 255, 255};
-            gpu_append(differences, frame, CGRectMake(cursor_x, cursor_y, cursor_width, cursor_height), white);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y, cursor_width, cursor_height), white, COMPOSE_DIFFERENCE);
         } else {
             CGFloat edge = 2.0;
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y, cursor_width, edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + cursor_height - edge, cursor_width, edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
-            gpu_append(fills, frame, CGRectMake(cursor_x + cursor_width - edge, cursor_y + edge, edge, cursor_height - 2.0 * edge), color);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y, cursor_width, edge), color, COMPOSE_FILL);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y + cursor_height - edge, cursor_width, edge), color, COMPOSE_FILL);
+            compose_append(rects, frame, CGRectMake(cursor_x, cursor_y + edge, edge, cursor_height - 2.0 * edge), color, COMPOSE_FILL);
+            compose_append(rects, frame, CGRectMake(cursor_x + cursor_width - edge, cursor_y + edge, edge, cursor_height - 2.0 * edge), color, COMPOSE_FILL);
         }
     }
-    id<MTLTexture> target = (__bridge id<MTLTexture>)frame->texture;
-    id<MTLCommandBuffer> commands = [gpu_queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-    [blit copyFromTexture:(__bridge id<MTLTexture>)frame->strip_texture
-              sourceSlice:0
-              sourceLevel:0
-             sourceOrigin:MTLOriginMake(0, 0, 0)
-               sourceSize:MTLSizeMake(frame->width, frame->height, 1)
-                toTexture:target
-         destinationSlice:0
-         destinationLevel:0
-        destinationOrigin:MTLOriginMake(0, 0, 0)];
-    for (NSUInteger i = 0; i < image_rects.length / sizeof(MTLRegion); i++) {
-        MTLRegion region = ((const MTLRegion *)image_rects.bytes)[i];
-        [blit copyFromTexture:(__bridge id<MTLTexture>)frame->overlay_texture
-                  sourceSlice:0
-                  sourceLevel:0
-                 sourceOrigin:region.origin
-                   sourceSize:region.size
-                    toTexture:target
-             destinationSlice:0
-             destinationLevel:0
-            destinationOrigin:region.origin];
-    }
-    [blit endEncoding];
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
-    const float size[2] = {(float)frame->width, (float)frame->height};
-    gpu_encode(encoder, gpu_fill, fills, size);
-    gpu_encode(encoder, gpu_difference, differences, size);
-    [encoder endEncoding];
-    [commands commit];
-    [commands waitUntilCompleted];
-    if (commands.status != MTLCommandBufferStatusCompleted) {
-        gpu_fail(@"the frame render pass failed", commands.error);
-        return -4;
-    }
+    int composed = frame_compose(frame, rects);
+    if (composed != 0) return composed;
     return 0;
 }
 
 #ifdef SOKSAK_DIAGNOSTICS
-uint32_t frame_gpu_strips_drawn(Frame *frame) {
+uint32_t frame_strips_drawn(Frame *frame) {
     return frame->strips_drawn;
 }
 #endif
@@ -973,23 +868,9 @@ static int frame_select_target(Frame *frame) {
     frame->targets = targets;
     FrameTarget *target = &frame->targets[frame->target_count];
     memset(target, 0, sizeof(*target));
-    target->surface = surface_create(frame->width, frame->height, frame->texture != NULL, target->nonce);
+    target->surface = surface_create(frame->width, frame->height, target->nonce);
     if (!target->surface) return -1;
     target->id = IOSurfaceGetID(target->surface);
-    if (frame->texture) {
-        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                              width:frame->width
-                                                                                             height:frame->height
-                                                                                          mipmapped:NO];
-        descriptor.usage = MTLTextureUsageRenderTarget;
-        id<MTLTexture> texture = [gpu_device newTextureWithDescriptor:descriptor iosurface:target->surface plane:0];
-        if (!texture) {
-            CFRelease(target->surface);
-            gpu_fail(@"Metal gives no texture over a new target surface of the frame", nil);
-            return -4;
-        }
-        target->texture = (__bridge_retained void *)texture;
-    }
     frame->target_count++;
     frame_use_target(frame, frame->target_count - 1);
     return 0;
@@ -1022,20 +903,17 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     if (!frame || !screen || !metrics) return -1;
     int selected = frame_select_target(frame);
     if (selected != 0) return selected;
-    if (frame->texture) return frame_draw_gpu(frame, screen, metrics, images, image_count, render_output);
+    if (frame->strips) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
     return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
 }
 
 void frame_drop(Frame *frame) {
     if (frame) {
         for (uint32_t i = 0; i < frame->target_count; i++) {
-            if (frame->targets[i].texture) CFRelease(frame->targets[i].texture);
             if (frame->targets[i].surface) CFRelease(frame->targets[i].surface);
         }
         free(frame->targets);
-        if (frame->strip_texture) CFRelease(frame->strip_texture);
         if (frame->strips) CFRelease(frame->strips);
-        if (frame->overlay_texture) CFRelease(frame->overlay_texture);
         if (frame->overlay) CFRelease(frame->overlay);
         if (frame->rows) CFRelease(frame->rows);
         if (frame->configuration) CFRelease(frame->configuration);

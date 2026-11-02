@@ -1,4 +1,4 @@
-# GPU terminal sidecar
+# Terminal engine sidecar
 
 [한국어](README.ko.md)
 

@@ -58,7 +58,7 @@ fn pixels(frame: &Frame, width: u32, height: u32) -> Vec<[u8; 4]> {
 }
 
 #[test]
-fn the_gpu_frame_fills_backgrounds_and_the_cursor_with_the_pixels_of_the_cpu_frame() {
+fn the_strip_frame_fills_backgrounds_and_the_cursor_with_the_pixels_of_the_coregraphics_frame() {
     let metrics = metrics(13.0, 2.0);
     let width = metrics.cell_width as u32 * 6 + 3;
     let height = metrics.cell_height as u32 * 3 + 5;
@@ -72,14 +72,16 @@ fn the_gpu_frame_fills_backgrounds_and_the_cursor_with_the_pixels_of_the_cpu_fra
     ] {
         let screen = filled_screen(shape);
         let cursor = cursor_render(shape);
-        let cpu = Frame::new(width, height).expect("cpu frame");
-        cpu.draw_with_theme(&screen, &metrics, cursor, &theme)
-            .expect("cpu draw");
-        let gpu = Frame::new_gpu(width, height).expect("gpu frame");
-        gpu.draw_with_theme(&screen, &metrics, cursor, &theme)
-            .expect("gpu draw");
-        let expected = pixels(&cpu, width, height);
-        let found = pixels(&gpu, width, height);
+        let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+        coregraphics
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("coregraphics draw");
+        let strip = Frame::new_strip(width, height).expect("strip frame");
+        strip
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("strip draw");
+        let expected = pixels(&coregraphics, width, height);
+        let found = pixels(&strip, width, height);
         let differing: Vec<(u32, u32, [u8; 4], [u8; 4])> = expected
             .iter()
             .zip(&found)
@@ -92,7 +94,7 @@ fn the_gpu_frame_fills_backgrounds_and_the_cursor_with_the_pixels_of_the_cpu_fra
             .collect();
         assert!(
             differing.is_empty(),
-            "{shape:?}: the gpu frame differs from the cpu frame at (x, y, cpu, gpu) {differing:?}"
+            "{shape:?}: the strip frame differs from the coregraphics frame at (x, y, coregraphics, strip) {differing:?}"
         );
     }
 }
@@ -121,9 +123,9 @@ fn text_screen() -> Screen {
     screen
 }
 
-fn assert_same_pixels(cpu: &Frame, gpu: &Frame, width: u32, height: u32, what: &str) {
-    let expected = pixels(cpu, width, height);
-    let found = pixels(gpu, width, height);
+fn assert_same_pixels(coregraphics: &Frame, strip: &Frame, width: u32, height: u32, what: &str) {
+    let expected = pixels(coregraphics, width, height);
+    let found = pixels(strip, width, height);
     let differing: Vec<(u32, u32, [u8; 4], [u8; 4])> = expected
         .iter()
         .zip(&found)
@@ -133,19 +135,19 @@ fn assert_same_pixels(cpu: &Frame, gpu: &Frame, width: u32, height: u32, what: &
         .collect();
     assert!(
         differing.is_empty(),
-        "{what}: {} pixels differ, first (x, y, cpu, gpu) {:?}",
+        "{what}: {} pixels differ, first (x, y, coregraphics, strip) {:?}",
         differing.len(),
         &differing[..differing.len().min(8)]
     );
 }
 
 #[test]
-fn the_gpu_frame_draws_text_with_the_pixels_of_the_cpu_frame_across_draws() {
+fn the_strip_frame_draws_text_with_the_pixels_of_the_coregraphics_frame_across_draws() {
     let metrics = metrics(13.0, 2.0);
     let width = metrics.cell_width as u32 * 6 + 3;
     let height = metrics.cell_height as u32 * 3 + 5;
     let theme = TerminalTheme::dark();
-    let gpu = Frame::new_gpu(width, height).expect("gpu frame");
+    let strip = Frame::new_strip(width, height).expect("strip frame");
     let mut screen = text_screen();
     // The first draw draws every strip; the second changes one row and moves the block cursor over a glyph; the third
     // adds a preedit, which the layout places in the cells of the cursor row.
@@ -165,12 +167,20 @@ fn the_gpu_frame_draws_text_with_the_pixels_of_the_cpu_frame_across_draws() {
             });
         }
         let cursor = cursor_render(CursorShape::Block);
-        let cpu = Frame::new(width, height).expect("cpu frame");
-        cpu.draw_with_theme(&screen, &metrics, cursor, &theme)
-            .expect("cpu draw");
-        gpu.draw_with_theme(&screen, &metrics, cursor, &theme)
-            .expect("gpu draw");
-        assert_same_pixels(&cpu, &gpu, width, height, &format!("draw {step}"));
+        let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+        coregraphics
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("coregraphics draw");
+        strip
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("strip draw");
+        assert_same_pixels(
+            &coregraphics,
+            &strip,
+            width,
+            height,
+            &format!("draw {step}"),
+        );
     }
 }
 
@@ -200,7 +210,7 @@ fn image(x: u32, y: u32, width: u32, height: u32) -> InlineImagePlacement {
 }
 
 #[test]
-fn the_gpu_frame_composites_inline_images_with_the_pixels_of_the_cpu_frame() {
+fn the_strip_frame_composites_inline_images_with_the_pixels_of_the_coregraphics_frame() {
     let metrics = metrics(13.0, 2.0);
     let cell_width = metrics.cell_width as u32;
     let cell_height = metrics.cell_height as u32;
@@ -220,17 +230,19 @@ fn the_gpu_frame_composites_inline_images_with_the_pixels_of_the_cpu_frame() {
         hidden,
     ];
     let cursor = cursor_render(CursorShape::Block);
-    let cpu = Frame::new(width, height).expect("cpu frame");
-    cpu.draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect("cpu draw");
-    let gpu = Frame::new_gpu(width, height).expect("gpu frame");
-    gpu.draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect("gpu draw");
-    assert_same_pixels(&cpu, &gpu, width, height, "inline images");
+    let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+    coregraphics
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect("coregraphics draw");
+    let strip = Frame::new_strip(width, height).expect("strip frame");
+    strip
+        .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
+        .expect("strip draw");
+    assert_same_pixels(&coregraphics, &strip, width, height, "inline images");
 }
 
 #[test]
-fn the_gpu_frame_refuses_an_inline_image_outside_the_frame_as_the_cpu_frame_does() {
+fn the_strip_frame_refuses_an_inline_image_outside_the_frame_as_the_coregraphics_frame_does() {
     let metrics = metrics(13.0, 1.0);
     let width = metrics.cell_width as u32 * 6;
     let height = metrics.cell_height as u32 * 3;
@@ -238,26 +250,26 @@ fn the_gpu_frame_refuses_an_inline_image_outside_the_frame_as_the_cpu_frame_does
     let images = [image(width - 2, 0, 4, 4)];
     let cursor = cursor_render(CursorShape::Block);
     let theme = TerminalTheme::dark();
-    let cpu = Frame::new(width, height).expect("cpu frame");
-    let gpu = Frame::new_gpu(width, height).expect("gpu frame");
-    let cpu_error = cpu
+    let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+    let strip = Frame::new_strip(width, height).expect("strip frame");
+    let coregraphics_error = coregraphics
         .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect_err("cpu refuses");
-    let gpu_error = gpu
+        .expect_err("coregraphics refuses");
+    let strip_error = strip
         .draw_with_theme_and_inline_images(&screen, &metrics, cursor, &theme, &images)
-        .expect_err("gpu refuses");
-    assert_eq!(gpu_error, cpu_error);
+        .expect_err("strip refuses");
+    assert_eq!(strip_error, coregraphics_error);
 }
 
 #[cfg(feature = "diagnostics")]
 #[test]
-fn the_gpu_frame_draws_only_the_strips_of_changed_rows() {
+fn the_strip_frame_draws_only_the_strips_of_changed_rows() {
     let metrics = metrics(13.0, 1.0);
-    let frame = Frame::new_gpu(
+    let frame = Frame::new_strip(
         metrics.cell_width as u32 * 6,
         metrics.cell_height as u32 * 3,
     )
-    .expect("gpu frame");
+    .expect("strip frame");
     let theme = TerminalTheme::dark();
     let mut screen = text_screen();
     let cursor = cursor_render(CursorShape::Block);
@@ -286,7 +298,7 @@ fn the_gpu_frame_draws_only_the_strips_of_changed_rows() {
 }
 
 // A frame draws into a surface that the host does not hold. Holding the drawn surface moves the next draw to another
-// surface, and releasing it lets a later draw use it again; both the CPU and the GPU frame keep this pool.
+// surface, and releasing it lets a later draw use it again; both frames keep this pool.
 #[test]
 fn a_held_surface_is_not_drawn_into_until_it_is_released() {
     let metrics = metrics(13.0, 1.0);
@@ -295,8 +307,14 @@ fn a_held_surface_is_not_drawn_into_until_it_is_released() {
     let theme = TerminalTheme::dark();
     let cursor = cursor_render(CursorShape::Block);
     for (kind, frame) in [
-        ("cpu", Frame::new(width, height).expect("cpu frame")),
-        ("gpu", Frame::new_gpu(width, height).expect("gpu frame")),
+        (
+            "coregraphics",
+            Frame::new(width, height).expect("coregraphics frame"),
+        ),
+        (
+            "strip",
+            Frame::new_strip(width, height).expect("strip frame"),
+        ),
     ] {
         let screen = text_screen();
         frame
@@ -317,10 +335,11 @@ fn a_held_surface_is_not_drawn_into_until_it_is_released() {
             .expect("draw while held");
         let second = frame.id();
         assert_ne!(second, first, "{kind}: a held surface is not drawn into");
-        let cpu = Frame::new(width, height).expect("reference frame");
-        cpu.draw_with_theme(&screen, &metrics, cursor, &theme)
+        let coregraphics = Frame::new(width, height).expect("reference frame");
+        coregraphics
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
             .expect("reference draw");
-        assert_same_pixels(&cpu, &frame, width, height, kind);
+        assert_same_pixels(&coregraphics, &frame, width, height, kind);
         frame.hold(second).expect("hold the second");
         frame.release(first).expect("release");
         frame
@@ -342,11 +361,11 @@ fn a_held_surface_is_not_drawn_into_until_it_is_released() {
     }
 }
 
-// The image surface of a session draws on the GPU frame, which redraws only the rows that changed; the CoreGraphics frame
+// The image surface of a session draws on the strip frame, which redraws only the rows that changed; the CoreGraphics frame
 // draws every cell on every frame.
 #[cfg(feature = "diagnostics")]
 #[test]
-fn an_image_surface_of_a_session_draws_on_the_gpu_frame() {
+fn an_image_surface_of_a_session_draws_on_the_strip_frame() {
     use soksak_sidecar_alacritty_core::platform::darwin::frame::default_font;
     use soksak_sidecar_alacritty_core::platform::{ImageConfiguration, ImageState};
     let configuration = ImageConfiguration {
