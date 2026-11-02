@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-17: sidecar를 0.0.3으로 release했다.
 - S1-18: sidecar는 records kit 0.0.6을 쓴다.
 - S1-16: service의 시작 기록과 stall dump는 sidecar를 `alacritty`로 적는다.
 - S1-15: `make test`는 diagnostics build의 frame test를 모두 실행한다.
