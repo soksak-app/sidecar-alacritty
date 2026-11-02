@@ -542,7 +542,9 @@ fn process_group_members_report_running_and_ended_processes() {
 
 /// When a shell ends with unread PTY output, the kernel closes the slave and waits for the output
 /// to drain. Meanwhile the shell is exiting, not a zombie, and macOS answers signals to its group
-/// with EPERM.
+/// with EPERM. The exit marks the process as exiting (`PROC_FLAG_INEXIT`) before it drains the
+/// references to the process; until that drain, a signal to the group still finds the process and
+/// is sent. The test therefore waits for the stage at which a signal 0 probe is refused.
 #[test]
 fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     use soksak_sidecar_alacritty_core::platform::darwin::process_group::members;
@@ -578,12 +580,15 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
     let started = std::time::Instant::now();
     let exiting = loop {
         let now = members(group).expect("the group must be readable");
-        if now.iter().any(|member| member.exiting && !member.zombie) {
+        // A signal 0 probe checks the permission to signal and delivers nothing.
+        let refused = unsafe { libc::kill(-group, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if refused && now.iter().any(|member| member.exiting && !member.zombie) {
             break now;
         }
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),
-            "the shell never reported an exit in progress: {now:?}"
+            "the shell never reached the exit stage that refuses signals: {now:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(5));
     };

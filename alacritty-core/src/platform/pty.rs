@@ -90,11 +90,12 @@ pub fn kill_process_group(
             Err(nix::errno::Errno::ESRCH) => Ok(KillResult::NoSuchProcess),
             #[cfg(target_os = "macos")]
             Err(nix::errno::Errno::EPERM) => {
-                // On macOS, a signal to a group whose members are all handling exit() or waiting to
-                // be reaped (zombies) returns EPERM. A shell that ends with unread output left is
-                // ending while it closes the terminal and waits for the output to drain. Such a
-                // group has no process left to end. If a member has not ended, the call fails and
-                // records its state.
+                // On macOS, a signal to a group returns EPERM when the kill finds no member: each
+                // member is a zombie or an exiting process whose references the exit has drained.
+                // An exiting process is still found, and the signal sent, before that drain. A shell
+                // that ends with unread output left is ending while it closes the terminal and waits
+                // for the output to drain. Such a group has no process left to end. If a member has
+                // not ended, the call fails and records its state.
                 let members = crate::platform::darwin::process_group::members(group)
                     .map_err(|error| format!("kill PTY process group {group}: EPERM; {error}"))?;
                 if members.iter().all(|member| member.ended()) {
