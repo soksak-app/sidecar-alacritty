@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-4: sidecar는 `soksak-app/sidecar-alacritty`로 공개되고, 0.0.1로 release되고, registry에 등록됐다.
 - S1-7: 그린 frame은 커서, caret, scrollback이 바뀌면 그것을 담은 `view` 이벤트를 보낸다.
 - S1-4-2: test가 pre-push hook의 text를 맞추지 않고 hook을 실행해 push range를 검사한다.
 - S1-4-1: pre-push hook은 저장소의 첫 push에서 push하는 commit을 모두 검사한다.

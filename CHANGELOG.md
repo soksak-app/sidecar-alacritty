@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-4: The sidecar is public as `soksak-app/sidecar-alacritty`, released as 0.0.1 and listed in the registry.
 - S1-7: A drawn frame sends a `view` event with its cursor, caret and scrollback when they change.
 - S1-4-2: A test runs the pre-push hook and checks its pushed range instead of matching its text.
 - S1-4-1: The pre-push hook checks every pushed commit on the first push of a repository.
