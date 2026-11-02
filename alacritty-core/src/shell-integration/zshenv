@@ -1,0 +1,52 @@
+# The zsh shell integration of the soksak terminal. The sidecar sets ZDOTDIR to the folder of this file and starts zsh.
+# This file restores the original ZDOTDIR, reads the .zshenv of the user, and then installs the hooks that send the
+# OSC 133 marks in an interactive shell. zsh reads the other startup files (.zprofile, .zshrc, .zlogin) from the
+# restored ZDOTDIR.
+
+if [[ -n "${SOKSAK_ZSH_ZDOTDIR+X}" ]]; then
+    'builtin' 'export' ZDOTDIR="$SOKSAK_ZSH_ZDOTDIR"
+    'builtin' 'unset' 'SOKSAK_ZSH_ZDOTDIR'
+else
+    'builtin' 'unset' 'ZDOTDIR'
+fi
+
+{
+    # Without ZDOTDIR the file is read from HOME, as zsh does. A file that cannot be read is skipped, as zsh does.
+    'builtin' 'typeset' _soksak_file="${ZDOTDIR-$HOME}/.zshenv"
+    [[ ! -r "$_soksak_file" ]] || 'builtin' 'source' '--' "$_soksak_file"
+} always {
+    'builtin' 'unset' '_soksak_file'
+    if [[ -o 'interactive' ]]; then
+        # The working directory (OSC 7). Every byte other than the unreserved characters and / is percent-encoded.
+        _soksak_directory() {
+            'builtin' 'emulate' -L zsh
+            'builtin' 'local' LC_ALL=C encoded= char hex
+            for char in ${(s::)PWD}; do
+                case $char in
+                    [A-Za-z0-9._~/-]) encoded+=$char ;;
+                    *) 'builtin' 'printf' -v hex '%%%02X' "'$char"; encoded+=$hex ;;
+                esac
+            done
+            'builtin' 'print' -n "\e]7;file://${HOST}${encoded}\a"
+        }
+        # Before the prompt: the exit status of the previous command when there was one (D), the working directory, and
+        # the prompt start (A).
+        _soksak_precmd() {
+            'builtin' 'local' ret=$?
+            if (( ${+_soksak_running} )); then
+                'builtin' 'print' -n "\e]133;D;${ret}\a"
+                'builtin' 'unset' '_soksak_running'
+            fi
+            _soksak_directory
+            'builtin' 'print' -n '\e]133;A\a'
+        }
+        # Before a command runs: the command start (C).
+        _soksak_preexec() {
+            _soksak_running=1
+            'builtin' 'print' -n '\e]133;C\a'
+        }
+        'builtin' 'autoload' -Uz add-zsh-hook
+        add-zsh-hook precmd _soksak_precmd
+        add-zsh-hook preexec _soksak_preexec
+    fi
+}

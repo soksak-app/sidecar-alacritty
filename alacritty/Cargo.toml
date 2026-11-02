@@ -1,0 +1,38 @@
+[package]
+name = "soksak-sidecar-alacritty"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/soksak-app/sidecar-alacritty"
+publish = false
+
+[[bin]]
+name = "soksak-alacritty"
+path = "src/main.rs"
+
+[[bin]]
+name = "soksak-alacritty-replay"
+path = "src/replay.rs"
+
+[features]
+# Enables the engine input recording of diagnostic builds in alacritty-core.
+diagnostics = ["soksak-sidecar-alacritty-core/diagnostics"]
+
+[dependencies]
+alacritty_terminal = "0.26"
+serde_json = "1"
+soksak-sidecar-alacritty-core = { path = "../alacritty-core" }
+# The form of the time of a text record (core docs/spec/diagnostics.md#forms), which the standard library does not format.
+time = { version = "0.3", features = ["formatting", "macros"] }
+tokio = { version = "1", features = ["io-util", "rt-multi-thread", "time", "net", "process", "sync", "macros", "io-std"] }
+
+[build-dependencies]
+pkg-config = "0.3"
+serde_json = "1"
+
+[dev-dependencies]
+libc = "0.2"
+time = { version = "0.3", features = ["parsing"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }

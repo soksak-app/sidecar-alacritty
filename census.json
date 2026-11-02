@@ -1,0 +1,55 @@
+{
+  "exclude": "(^|/)target/",
+  "entrances": {
+    "rs.thread-spawn": [
+      "^alacritty-core/src/thread\\.rs$"
+    ]
+  },
+  "pending": {},
+  "emitters": {
+    "rs": [
+      {
+        "call": "emit",
+        "level": 0,
+        "event": 1,
+        "fields": 2
+      },
+      {
+        "call": "emit_for",
+        "level": 0,
+        "event": 1,
+        "fields": 3
+      },
+      {
+        "call": "record_error",
+        "fixed": "error",
+        "name": "sidecar.alacritty.record.error",
+        "event": 0
+      },
+      {
+        "call": "record_info",
+        "fixed": "info",
+        "name": "sidecar.alacritty.record.info",
+        "event": 0
+      },
+      {
+        "call": "input",
+        "fixed": "info",
+        "event": 1,
+        "only": "^alacritty-core/src/protocol\\.rs$"
+      },
+      {
+        "call": "policy_watch_started",
+        "fixed": "info",
+        "name": "sidecar.alacritty.policy.watch_started",
+        "event": 0
+      },
+      {
+        "call": "policy_watch_event",
+        "fixed": "info",
+        "name": "sidecar.alacritty.policy.watch_event",
+        "event": 0
+      }
+    ]
+  }
+}

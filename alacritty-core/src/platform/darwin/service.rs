@@ -1,0 +1,609 @@
+//! Persistent protocol-1 transport for the in-process terminal service.
+
+use crate::events::{Events, Level};
+use crate::platform::darwin::file_watch::{Change, Changed, Failed, watch_file};
+use crate::protocol::{LocalSessionPort, PersistentOwner, PersistentRegistry, serve_with_registry};
+use nix::errno::Errno;
+use serde::{Deserialize, Serialize};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::task::JoinSet;
+use tokio::time::{Duration, timeout};
+use uuid::Uuid;
+
+pub const PROTOCOL: u64 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Endpoint {
+    pub protocol: u64,
+    pub pid: u32,
+    pub socket: String,
+    pub token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Hello {
+    operation: String,
+    protocol: u64,
+    token: String,
+    client: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HelloReply<'a> {
+    operation: &'static str,
+    protocol: Option<u64>,
+    /// The version of this sidecar, by which a host tells a service of another version than the
+    /// installed one (core docs/spec/terminal-runtime.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'static str>,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
+}
+
+pub struct AlreadyRunning {
+    pub endpoint: Option<Endpoint>,
+}
+
+struct ServiceCleanup {
+    service_dir: PathBuf,
+    token: String,
+    socket_dir: PathBuf,
+    log: Events,
+}
+
+impl Drop for ServiceCleanup {
+    fn drop(&mut self) {
+        // The endpoint is removed only while it names this service: another service that took the
+        // folder publishes its own endpoint, and that endpoint is kept.
+        match endpoint_left(&self.service_dir, &self.token) {
+            Ok(Some("endpoint-replaced")) => {}
+            Ok(_) => {
+                if let Err(error) = fs::remove_file(self.service_dir.join("endpoint.json"))
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    self.log
+                        .record_error("service", format!("endpoint cleanup failed: {error}"));
+                }
+            }
+            Err(error) => self
+                .log
+                .record_error("service", format!("endpoint cleanup failed: {error}")),
+        }
+        if let Err(error) = fs::remove_dir_all(&self.socket_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            self.log
+                .record_error("service", format!("socket cleanup failed: {error}"));
+        }
+    }
+}
+
+struct Lock(File, Events);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        if let Err(error) = nix::fcntl::flock(self.0.as_raw_fd(), nix::fcntl::FlockArg::Unlock) {
+            self.1
+                .record_error("service", format!("lock unlock failed: {error}"));
+        }
+    }
+}
+
+fn service_lock(service_dir: &Path) -> Result<File, String> {
+    fs::create_dir_all(service_dir).map_err(|e| format!("create service directory: {e}"))?;
+    fs::set_permissions(service_dir, fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("secure service directory: {e}"))?;
+    let path = service_dir.join("service.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| format!("open service lock: {e}"))?;
+    match nix::fcntl::flock(
+        file.as_raw_fd(),
+        nix::fcntl::FlockArg::LockExclusiveNonblock,
+    ) {
+        Ok(_) => Ok(file),
+        Err(error) if error == Errno::EAGAIN || error == Errno::EWOULDBLOCK => {
+            Err("already-running".to_string())
+        }
+        Err(error) => Err(format!("lock service: {error}")),
+    }
+}
+
+fn write_endpoint(service_dir: &Path, endpoint: &Endpoint) -> Result<(), String> {
+    let bytes = serde_json::to_vec(endpoint).map_err(|e| format!("encode endpoint: {e}"))?;
+    let temporary = service_dir.join(format!("endpoint.json.{}.tmp", Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|e| format!("create endpoint: {e}"))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("write endpoint: {e}"))?;
+    file.sync_all().map_err(|e| format!("sync endpoint: {e}"))?;
+    fs::rename(temporary, service_dir.join("endpoint.json"))
+        .map_err(|e| format!("publish endpoint: {e}"))
+}
+
+fn read_endpoint(service_dir: &Path) -> Result<Endpoint, String> {
+    let path = service_dir.join("endpoint.json");
+    let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("decode {}: {error}", path.display()))
+}
+
+/// Returns why the endpoint of the service in `service_dir` no longer names the service with
+/// `token`: the folder was removed, the endpoint file was removed, or another endpoint replaced it.
+/// `Ok(None)` means the endpoint still names the service.
+fn endpoint_left(service_dir: &Path, token: &str) -> Result<Option<&'static str>, String> {
+    if !service_dir.exists() {
+        return Ok(Some("folder-removed"));
+    }
+    match fs::read(service_dir.join("endpoint.json")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Some("endpoint-removed")),
+        Err(error) => Err(format!("read the endpoint: {error}")),
+        // The endpoint is written by rename, so a read holds a whole endpoint; one that is not an
+        // endpoint of this service was published by another writer.
+        Ok(bytes) => match serde_json::from_slice::<Endpoint>(&bytes) {
+            Ok(endpoint) if endpoint.token == token => Ok(None),
+            Ok(_) | Err(_) => Ok(Some("endpoint-replaced")),
+        },
+    }
+}
+
+/// Stops the watch of the endpoint when the service returns.
+struct EndpointWatch(Option<Box<dyn FnOnce() + Send>>);
+
+impl Drop for EndpointWatch {
+    fn drop(&mut self) {
+        if let Some(stop) = self.0.take() {
+            stop();
+        }
+    }
+}
+
+/// Once the lock is held, the previous service has ended. Removes the socket directory of the
+/// previous service that ended without cleanup (forced exit or crash). Only the /tmp/spv-*
+/// directories that this service creates are removed; a failed removal is reported with its cause.
+pub fn remove_previous_socket(service_dir: &Path, log: &Events) {
+    // try_exists reports a failed check as an error, which is not the absence of the endpoint.
+    match service_dir.join("endpoint.json").try_exists() {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            log.record_error("service", format!("previous endpoint: {error}"));
+            return;
+        }
+    }
+    let endpoint = match read_endpoint(service_dir) {
+        Ok(endpoint) => endpoint,
+        Err(error) => {
+            log.record_error("service", format!("previous endpoint: {error}"));
+            return;
+        }
+    };
+    let socket = PathBuf::from(&endpoint.socket);
+    let owned = socket.parent().filter(|directory| {
+        directory.parent() == Some(Path::new("/tmp"))
+            && directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("spv-"))
+    });
+    let Some(directory) = owned else {
+        log.record_error(
+            "service",
+            format!(
+                "previous socket {} is not in a service socket directory",
+                endpoint.socket
+            ),
+        );
+        return;
+    };
+    if let Err(error) = fs::remove_dir_all(directory)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log.record_error(
+            "service",
+            format!("previous socket cleanup failed: {error}"),
+        );
+    }
+}
+
+fn socket_path() -> Result<(PathBuf, PathBuf), String> {
+    // Keeps the absolute socket path below the 104-byte Unix socket limit on macOS.
+    let directory = PathBuf::from("/tmp").join(format!("spv-{}", Uuid::new_v4()));
+    fs::create_dir(&directory).map_err(|e| format!("create socket directory: {e}"))?;
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("secure socket directory: {e}"))?;
+    Ok((directory.clone(), directory.join("service.sock")))
+}
+
+async fn authenticate(
+    stream: UnixStream,
+    expected_token: &str,
+) -> Result<
+    (
+        BufReader<tokio::net::unix::OwnedReadHalf>,
+        tokio::net::unix::OwnedWriteHalf,
+        String,
+    ),
+    String,
+> {
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let mut line = String::new();
+    timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        .await
+        .map_err(|_| "hello timeout".to_string())?
+        .map_err(|e| format!("read hello: {e}"))?;
+    let hello =
+        serde_json::from_str::<Hello>(line.trim()).map_err(|_| "invalid hello".to_string())?;
+    let valid = hello.operation == "hello"
+        && hello.protocol == PROTOCOL
+        && hello.token == expected_token
+        && !hello.client.is_empty();
+    let reply = if valid {
+        HelloReply {
+            operation: "hello",
+            protocol: Some(PROTOCOL),
+            // Both crates and alacritty/package.json declare the same version
+            // (tests/versions.test.mjs).
+            version: Some(env!("CARGO_PKG_VERSION")),
+            ok: true,
+            error: None,
+        }
+    } else {
+        HelloReply {
+            operation: "hello",
+            protocol: None,
+            version: None,
+            ok: false,
+            error: Some("authentication or protocol mismatch"),
+        }
+    };
+    let mut encoded = serde_json::to_vec(&reply).map_err(|e| format!("encode hello reply: {e}"))?;
+    encoded.push(b'\n');
+    write_half
+        .write_all(&encoded)
+        .await
+        .map_err(|e| format!("write hello reply: {e}"))?;
+    write_half
+        .flush()
+        .await
+        .map_err(|e| format!("flush hello reply: {e}"))?;
+    if !valid {
+        return Err("authentication or protocol mismatch".to_string());
+    }
+    Ok((reader, write_half, hello.client))
+}
+
+/// Runs the persistent service. The PTY service is shared by all accepted connections, so the
+/// session does not stop when a transport connection closes.
+pub async fn serve_persistent(
+    service_dir: &Path,
+    engine_factory: Arc<dyn Fn() -> Box<dyn crate::protocol::Engine> + Send + Sync>,
+    log: Events,
+) -> Result<(), String> {
+    crate::platform::darwin::frame::load_default_font()?;
+    let _lock = match service_lock(service_dir) {
+        Ok(file) => Lock(file, log.clone()),
+        Err(error) if error == "already-running" => {
+            let endpoint = read_endpoint(service_dir)?;
+            let mut line = serde_json::to_vec(
+                &serde_json::json!({"error":"already-running","endpoint":endpoint}),
+            )
+            .map_err(|e| e.to_string())?;
+            line.push(b'\n');
+            std::io::stdout()
+                .write_all(&line)
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    remove_previous_socket(service_dir, &log);
+    let (socket_dir, socket) = socket_path()?;
+    let listener = UnixListener::bind(&socket).map_err(|e| format!("bind service socket: {e}"))?;
+    let token = Uuid::new_v4().to_string();
+    let _cleanup = ServiceCleanup {
+        service_dir: service_dir.to_path_buf(),
+        token: token.clone(),
+        socket_dir,
+        log: log.clone(),
+    };
+    let endpoint = Endpoint {
+        protocol: PROTOCOL,
+        pid: std::process::id(),
+        socket: socket.to_string_lossy().into_owned(),
+        token,
+    };
+    // On a termination request, the loop ends so the endpoint and socket directory are cleaned up.
+    // The session shell ends when its PTY closes. The handlers are installed before readiness is
+    // announced. If a termination request sent right after readiness is observed ends the process
+    // with the default action, cleanup does not run.
+    let mut terminate =
+        signal(SignalKind::terminate()).map_err(|e| format!("terminate signal: {e}"))?;
+    let mut interrupt =
+        signal(SignalKind::interrupt()).map_err(|e| format!("interrupt signal: {e}"))?;
+    write_endpoint(service_dir, &endpoint)?;
+    // The watch is started before the ready line, so a check that removes the folder after the
+    // ready line is seen by it. The kernel reports each change of the folder and of the endpoint,
+    // and the state is read only on a change.
+    let (ended_sender, mut ended) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
+    let watched_dir = service_dir.to_path_buf();
+    let watched_token = endpoint.token.clone();
+    let watch_log = log.clone();
+    let changed: Changed = Arc::new(move |_changes: &[Change]| {
+        match endpoint_left(&watched_dir, &watched_token) {
+            Ok(Some(reason)) => {
+                // The loop takes the first reason, and a later one is not used after the loop
+                // ended.
+                let _ = ended_sender.send(reason);
+            }
+            Ok(None) => {}
+            Err(error) => watch_log.record_error("service", format!("endpoint watch: {error}")),
+        }
+    });
+    let failed: Failed = {
+        let log = log.clone();
+        Arc::new(move |error: String| {
+            log.record_error("service", format!("endpoint watch: {error}"))
+        })
+    };
+    let _endpoint_watch = EndpointWatch(Some(
+        watch_file(&service_dir.join("endpoint.json"), changed, failed)
+            .map_err(|e| format!("watch the endpoint: {e}"))?,
+    ));
+    let mut ready =
+        serde_json::to_vec(&endpoint).map_err(|e| format!("encode ready endpoint: {e}"))?;
+    ready.push(b'\n');
+    std::io::stdout()
+        .write_all(&ready)
+        .map_err(|e| format!("write ready endpoint: {e}"))?;
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("flush ready endpoint: {e}"))?;
+
+    log.emit(
+        Level::Info,
+        "sidecar.alacritty.session_start",
+        &serde_json::json!({"role": "alacritty-core"}),
+    );
+    let service = Arc::new(crate::pty::PtyService::new(log.clone()));
+    let registry = PersistentRegistry::new();
+    let mut clients = JoinSet::new();
+    let mut had_client = false;
+    loop {
+        tokio::select! {
+            _ = terminate.recv() => {
+                record_stop(&log, "SIGTERM", clients.len());
+                return Ok(());
+            }
+            _ = interrupt.recv() => {
+                record_stop(&log, "SIGINT", clients.len());
+                return Ok(());
+            }
+            accepted = listener.accept() => {
+                let (stream, _) = accepted.map_err(|e| format!("accept service client: {e}"))?;
+                had_client = true;
+                let token = endpoint.token.clone();
+                let service = Arc::clone(&service);
+                let engine_factory = Arc::clone(&engine_factory);
+                let registry = Arc::clone(&registry);
+                let log = log.clone();
+                clients.spawn(async move {
+            match authenticate(stream, &token).await {
+            Err(error) => log.record_error("client authentication", error),
+            Ok((reader, writer, client)) => {
+                log.emit(
+                    Level::Info,
+                    "sidecar.alacritty.client_connect",
+                    &serde_json::json!({"owner": client}),
+                );
+                let owner = client.clone();
+                let disconnected = client.clone();
+                let factory_service = Arc::clone(&service);
+                let factory = Arc::new(move || {
+                    Arc::new(LocalSessionPort::new_with_owner(
+                        Arc::clone(&factory_service),
+                        owner.clone(),
+                    )) as Arc<dyn crate::protocol::SessionPort>
+                });
+                let close_service = Arc::clone(&service);
+                let close_client = client.clone();
+                let close_owner = Arc::new(move || close_service.close_owner(&close_client));
+                let ended = serve_with_registry(
+                    engine_factory,
+                    reader,
+                    writer,
+                    factory,
+                    PersistentOwner {
+                        close: close_owner,
+                        registry,
+                        owner: client,
+                        log: log.clone(),
+                    },
+                )
+                .await;
+                let mut fields = serde_json::json!({"owner": disconnected, "ok": ended.is_ok()});
+                if let Err(error) = &ended {
+                    fields["error"] = serde_json::json!(error.to_string());
+                }
+                log.emit(Level::Info, "sidecar.alacritty.client_disconnect", &fields);
+                if let Err(error) = ended {
+                    log.record_error("client session", error);
+                }
+            }
+            }
+                });
+            }
+            Some(reason) = ended.recv() => {
+                record_stop(&log, reason, clients.len());
+                return Ok(());
+            }
+            Some(joined) = clients.join_next(), if had_client => {
+                record_client_end(&log, joined);
+                if clients.is_empty() && registry.shutdown_requested() {
+                    record_stop(&log, "shutdown", clients.len());
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// Records that the service stops, and why: the signal that asked for it, or the shutdown request
+/// of the last client. `clients` is the number of client tasks that the service still holds.
+fn record_stop(log: &Events, reason: &str, clients: usize) {
+    log.emit(
+        Level::Info,
+        "sidecar.alacritty.session_stop",
+        &serde_json::json!({"reason": reason, "clients": clients}),
+    );
+}
+
+/// Records the end of the serve loop of the service and how it ended.
+pub fn record_end(log: &Events, served: &std::io::Result<()>) {
+    let mut fields = serde_json::json!({"ok": served.is_ok()});
+    if let Err(error) = served {
+        fields["error"] = serde_json::json!(error.to_string());
+    }
+    log.emit(Level::Info, "sidecar.alacritty.session_end", &fields);
+}
+
+/// Records the end of a client task that did not return normally (a panic, or a task that was
+/// cancelled).
+pub(crate) fn record_client_end(log: &Events, joined: Result<(), tokio::task::JoinError>) {
+    if let Err(error) = joined {
+        log.record_error("client session", format!("the client task ended: {error}"));
+    }
+}
+
+pub fn canonical_config_dir(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|e| format!("canonicalize config directory: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn endpoint_is_atomic_and_private() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path()).unwrap();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let endpoint = Endpoint {
+            protocol: PROTOCOL,
+            pid: 123,
+            socket: "/tmp/service.sock".to_string(),
+            token: "random-token".to_string(),
+        };
+        write_endpoint(directory.path(), &endpoint).unwrap();
+        assert_eq!(read_endpoint(directory.path()).unwrap().protocol, PROTOCOL);
+        let mode = fs::metadata(directory.path().join("endpoint.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn lock_is_single_instance_and_releases() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = service_lock(directory.path()).unwrap();
+        assert_eq!(
+            service_lock(directory.path()).unwrap_err(),
+            "already-running"
+        );
+        drop(first);
+        assert!(service_lock(directory.path()).is_ok());
+    }
+
+    #[test]
+    fn malformed_endpoint_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("endpoint.json"), b"not-json").unwrap();
+        let error = read_endpoint(directory.path()).unwrap_err();
+        assert!(error.contains("decode"));
+    }
+
+    #[tokio::test]
+    async fn a_client_task_that_panicked_is_an_error_record() {
+        let events = crate::events::test_support::TestEvents::new();
+        let panicked = tokio::spawn(async { panic!("injected client panic") });
+        record_client_end(&events.handle(), panicked.await);
+        let lines = events.lines();
+        let record = lines
+            .iter()
+            .find(|line| line["event"] == "sidecar.alacritty.record.error")
+            .expect("the panic of a client task is recorded");
+        assert_eq!(record["fields"]["where"], "client session");
+        let text = record["fields"]["text"].as_str().unwrap();
+        assert!(text.contains("the client task ended"), "{text}");
+        assert!(text.contains("panic"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn hello_authenticates_before_protocol_frames() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(async move { authenticate(server, "token").await });
+        client
+            .write_all(
+                br#"{"operation":"hello","protocol":1,"token":"token","client":"config-a"}
+"#,
+            )
+            .await
+            .unwrap();
+        let mut reply = String::new();
+        BufReader::new(client).read_line(&mut reply).await.unwrap();
+        let reply = serde_json::from_str::<serde_json::Value>(reply.trim()).unwrap();
+        assert_eq!(reply["ok"], true);
+        // The reply carries the version of this sidecar, so a host can tell a service of another
+        // version.
+        assert_eq!(
+            reply["version"],
+            env!("CARGO_PKG_VERSION"),
+            "hello reply {reply}"
+        );
+        let (_, _, client_id) = task.await.unwrap().unwrap();
+        assert_eq!(client_id, "config-a");
+    }
+
+    #[tokio::test]
+    async fn hello_rejects_wrong_token() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(async move { authenticate(server, "token").await });
+        client
+            .write_all(
+                br#"{"operation":"hello","protocol":1,"token":"wrong","client":"config-a"}
+"#,
+            )
+            .await
+            .unwrap();
+        let mut reply = String::new();
+        BufReader::new(client).read_line(&mut reply).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(reply.trim()).unwrap()["ok"],
+            false
+        );
+        assert!(task.await.unwrap().is_err());
+    }
+}

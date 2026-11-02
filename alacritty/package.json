@@ -1,0 +1,18 @@
+{
+  "name": "@soksak/sidecar-alacritty",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soksak-app/sidecar-alacritty.git",
+    "directory": "alacritty"
+  },
+  "type": "module",
+  "files": [
+    "sidecar.json",
+    "events.json",
+    "build/soksak-alacritty",
+    "build/soksak-alacritty-replay"
+  ]
+}

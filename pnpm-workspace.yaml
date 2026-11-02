@@ -1,0 +1,6 @@
+allowBuilds:
+  # The comment language check loads the WebAssembly grammar of each package with web-tree-sitter; their native
+  # addons are not used, so their build scripts do not run.
+  tree-sitter-bash: false
+  tree-sitter-javascript: false
+  tree-sitter-rust: false

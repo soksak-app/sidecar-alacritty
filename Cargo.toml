@@ -1,0 +1,7 @@
+# Sidecar Rust workspace. Separated from the tauri git pin in the root Cargo.toml.
+[workspace]
+resolver = "2"
+members = ["alacritty-core", "alacritty"]
+
+[profile.dev]
+incremental = true
