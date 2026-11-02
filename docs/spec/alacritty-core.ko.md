@@ -146,7 +146,7 @@ surface는 session 출력을 33 ms frame clock으로 그린다. 마지막 frame 
 
 ### GPU frame
 
-`Frame::new_gpu`가 만든 frame은 Metal render pass로 자기 IOSurface에 그린다. 그 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
+session의 image surface는 `Frame::new_gpu`가 만든 frame으로 그린다. render metadata를 모으는 diagnostic build(`SOKSAK_ALACRITTY_TRACE_DIR`)는 CoreGraphics frame으로 그린다. render metadata를 보고하는 frame이 그것뿐이기 때문이다. `Frame::new_gpu`가 만든 frame은 Metal render pass로 자기 IOSurface에 그린다. 그 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
 
 - frame은 IOSurface 위의 strip texture에 화면 행마다 strip 하나를 둔다. strip은 CoreGraphics frame의 칸 loop가 그리므로, 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 hash가 그 strip을 그린 hash와 다를 때만 다시 그린다. 크기, 글꼴, theme이 바뀌면 모든 strip을 다시 그린다. 그래서 frame의 CPU 비용은 바뀐 행에 비례한다.
 - 두 frame 모두 각 행을 그 행의 box로 자르므로, 행 위아래로 넘친 잉크는 그 행 안에서만 그린다.

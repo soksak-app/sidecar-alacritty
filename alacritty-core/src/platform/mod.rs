@@ -64,10 +64,13 @@ pub struct ImageConfiguration {
 
 #[cfg(target_os = "macos")]
 impl ImageState {
+    /// Creates the image state of a surface. Its frame draws on the GPU; a frame that collects render metadata is the
+    /// CoreGraphics frame, the only frame that reports it.
     pub fn new(
         configuration: &ImageConfiguration,
         font: &std::sync::Arc<TerminalFont>,
         font_size: f32,
+        render_metadata: bool,
     ) -> Result<ImageState, String> {
         let ImageConfiguration {
             name,
@@ -77,8 +80,12 @@ impl ImageState {
             height: height_px,
             scale,
         } = configuration.clone();
-        let frame = Frame::new(width_px, height_px)
-            .ok_or_else(|| format!("IOSurface creation failed for {width_px}x{height_px}"))?;
+        let frame = if render_metadata {
+            Frame::new(width_px, height_px)
+                .ok_or_else(|| format!("IOSurface creation failed for {width_px}x{height_px}"))?
+        } else {
+            Frame::new_gpu(width_px, height_px)?
+        };
         let device_metrics = metrics_for(font, font_size, scale)?;
         Ok(ImageState {
             name,

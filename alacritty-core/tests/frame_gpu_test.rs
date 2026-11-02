@@ -341,3 +341,37 @@ fn a_held_surface_is_not_drawn_into_until_it_is_released() {
         );
     }
 }
+
+// The image surface of a session draws on the GPU frame, which redraws only the rows that changed; the CoreGraphics frame
+// draws every cell on every frame.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn an_image_surface_of_a_session_draws_on_the_gpu_frame() {
+    use soksak_sidecar_alacritty_core::platform::darwin::frame::default_font;
+    use soksak_sidecar_alacritty_core::platform::{ImageConfiguration, ImageState};
+    let configuration = ImageConfiguration {
+        name: "view".to_string(),
+        generation: 1,
+        raster: 1,
+        width: 120,
+        height: 90,
+        scale: 1.0,
+    };
+    let state = ImageState::new(&configuration, &default_font(), 13.0, false).expect("image state");
+    let screen = filled_screen(CursorShape::Block);
+    let theme = TerminalTheme::dark();
+    state
+        .frame
+        .draw_with_theme(
+            &screen,
+            &state.metrics,
+            cursor_render(CursorShape::Block),
+            &theme,
+        )
+        .expect("first draw");
+    assert_eq!(
+        state.frame.strips_drawn(),
+        u32::from(screen.rows),
+        "the first draw of the image surface draws every row strip"
+    );
+}

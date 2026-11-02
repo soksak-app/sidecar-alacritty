@@ -144,7 +144,7 @@ A surface draws the output of its session on a frame clock of 33 ms: a change th
 
 ### GPU frame
 
-A frame created by `Frame::new_gpu` draws through a Metal render pass into its IOSurface. Its pixels equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.
+The image surface of a session draws on a frame created by `Frame::new_gpu`; a diagnostic build that collects render metadata (`SOKSAK_ALACRITTY_TRACE_DIR`) draws on the CoreGraphics frame, because only that frame reports render metadata. A frame created by `Frame::new_gpu` draws through a Metal render pass into its IOSurface. Its pixels equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.
 
 - The frame keeps one strip per screen row in a strip texture over an IOSurface. The cell loop of the CoreGraphics frame draws a strip, so one function draws text, wide characters, underlines and the preedit that `render_layout` places in the cells. A strip is drawn again only when the hash of its row differs from the hash it was drawn with; a change of size, font or theme draws every strip again. The CPU cost of a frame is then in proportion to the rows that changed.
 - Both frames clip each row to its row box, so ink that extends above or below its row is drawn only inside that row.
