@@ -57,3 +57,8 @@ test("make install installs the locked dependencies, and no other target install
   const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
   assert.deepEqual(makefile.split("\n").filter((line) => /^[^\t#][^:=]*:(?!=).*\bnode_modules\b/.test(line)), [], "a target depends on node_modules");
 });
+
+test("make frame-benchmark runs the benchmark with the declared service, answer and workload (S1-14)", { timeout: 30000 }, () => {
+  const line = recipe("frame-benchmark", ["SERVICE=/bin/service", "ANSWER=consumed", "WORKLOAD=idle"]).trim().split("\n").at(-1);
+  assert.equal(line, "node scripts/frame-benchmark.mjs --service /bin/service --answer consumed --workload idle");
+});

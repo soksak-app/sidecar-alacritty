@@ -1,6 +1,6 @@
 # Test, build, and release of the terminal engine sidecar repository (docs/features.md).
 # The release is the npm pack file of alacritty.
-.PHONY: install test build release candidate-release repeat push-check hooks
+.PHONY: install test build release candidate-release repeat push-check hooks frame-benchmark
 
 MACOS_MINIMUM = 14.4
 PROFILE ?= debug
@@ -46,6 +46,15 @@ test: build
 	pnpm exec soksak-events --census census.json --catalog alacritty/events.json .
 	node --test tests/
 	pnpm exec soksak-records
+
+# Measures one workload on a built service: `make build`, then `make frame-benchmark WORKLOAD=fullscreen`. SERVICE names
+# another built terminal service, and ANSWER=consumed answers a service whose region is in the copy mode. The check prints
+# one JSON line with the CPU time and the footprint (scripts/frame-benchmark.mjs).
+SERVICE ?= alacritty/build/soksak-alacritty
+ANSWER ?= leased
+WORKLOAD ?= statusline
+frame-benchmark:
+	node scripts/frame-benchmark.mjs --service $(SERVICE) --answer $(ANSWER) --workload $(WORKLOAD)
 
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # Uses alacritty/build/soksak-alacritty, which sidecar.json points to.

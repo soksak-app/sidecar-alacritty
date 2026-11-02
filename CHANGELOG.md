@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-14: `make frame-benchmark` measures the CPU time and the footprint of a built service.
 - S1-13: A frame draws without a GPU pass, which lowers the memory of a loaded service from 196 MB to 40 MB at the same CPU time.
 - S1-12: The sidecar is released as 0.0.2 and listed in the registry.
 - S1-11: The image surface of a session draws on the GPU frame, which redraws only the rows that changed.
