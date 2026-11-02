@@ -138,6 +138,10 @@ The `sidecar` and `native image` sources also report the surface error that the 
 
 A frame keeps a pool of target surfaces and draws only into a surface that the host does not hold and that the window server does not mark in use; when none is free it creates one, so a draw never waits for a surface. The host answers a frame of a region in the copy mode of core with `consumed` and of a region in the lease mode with `leased` ([native surfaces](https://github.com/soksak-app/core/blob/main/docs/spec/native-surfaces.md#image-regions)). Both answers end the wait for the frame in flight; `leased` also holds its surface. `{"image":{"released":{name, generation, raster, sequence}}}` returns the surface of that leased frame. A release of a frame of the current raster that is not leased is answered with `invalidParams` and `released names no leased frame`; a release of a frame of an earlier raster or generation, whose surfaces were dropped with it, changes nothing. The event `sidecar.alacritty.released` records each release with `held`.
 
+### Frame clock
+
+A surface draws the output of its session on a frame clock of 33 ms: a change that arrives less than 33 ms after the last frame is drawn when the 33 ms have passed, together with every other change of that interval, and a change after a longer pause is drawn at once. The cursor blink follows the same clock. For 200 ms after an `input` or `paste` request, output is drawn at once, so the echo of typing does not wait. A tick of the clock without a change draws no frame. The frame record names a frame of the clock with the reason `clock`.
+
 ### GPU frame
 
 A frame created by `Frame::new_gpu` draws through a Metal render pass into its IOSurface. Its pixels equal those of the CoreGraphics frame for the same screen, so the CoreGraphics frame is the single reference of both draws.

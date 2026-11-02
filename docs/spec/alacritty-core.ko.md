@@ -140,6 +140,10 @@ Native IME는 marked text를 소유한다. 각 native input report는 순서 있
 
 frame은 목표 surface pool을 두고, host가 쥐지 않았고 window server가 in use로 표시하지 않은 surface에만 그린다. 그런 surface가 없으면 새로 만들므로 그리기는 surface를 기다리지 않는다. host는 core의 copy 방식 region의 frame에 `consumed`로, lease 방식 region의 frame에 `leased`로 답한다([native surfaces](https://github.com/soksak-app/core/blob/main/docs/spec/native-surfaces.ko.md#그림-영역)). 두 응답 모두 보낸 frame의 기다림을 끝내고, `leased`는 그 surface를 hold한다. `{"image":{"released":{name, generation, raster, sequence}}}`는 그 leased frame의 surface를 돌려준다. 현재 raster의 frame 가운데 lease되지 않은 frame의 release에는 `invalidParams`와 `released names no leased frame`으로 답한다. 이전 raster나 generation의 frame은 그 surface를 raster와 함께 버렸으므로, 그 release는 아무것도 바꾸지 않는다. event `sidecar.alacritty.released`가 각 release를 `held`와 함께 기록한다.
 
+### Frame clock
+
+surface는 session 출력을 33 ms frame clock으로 그린다. 마지막 frame 뒤 33 ms가 지나기 전에 온 변경은 33 ms가 지났을 때 그 구간의 다른 변경과 함께 그리고, 더 긴 멈춤 뒤에 온 변경은 바로 그린다. cursor blink도 같은 clock을 따른다. `input`이나 `paste` 요청 뒤 200 ms 동안은 출력을 바로 그리므로 타이핑의 echo가 기다리지 않는다. 변경이 없는 clock tick은 frame을 그리지 않는다. frame 기록은 clock의 frame을 reason `clock`으로 적는다.
+
 ### GPU frame
 
 `Frame::new_gpu`가 만든 frame은 Metal render pass로 자기 IOSurface에 그린다. 그 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
