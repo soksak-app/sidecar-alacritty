@@ -58,6 +58,13 @@ test("make install installs the locked dependencies, and no other target install
   assert.deepEqual(makefile.split("\n").filter((line) => /^[^\t#][^:=]*:(?!=).*\bnode_modules\b/.test(line)), [], "a target depends on node_modules");
 });
 
+// Every test of the frame binary that the diagnostics feature declares runs: a filter by name leaves a new one out.
+test("make test runs every frame test of the diagnostics build (S1-15)", { timeout: 30000 }, () => {
+  const line = recipe("test").split("\n").find((text) => /--features diagnostics --test frame_strip_test/.test(text));
+  assert.ok(line, "make test does not run the frame tests with the diagnostics feature");
+  assert.doesNotMatch(line, / -E /);
+});
+
 test("make frame-benchmark runs the benchmark with the declared service, answer and workload (S1-14)", { timeout: 30000 }, () => {
   const line = recipe("frame-benchmark", ["SERVICE=/bin/service", "ANSWER=consumed", "WORKLOAD=idle"]).trim().split("\n").at(-1);
   assert.equal(line, "node scripts/frame-benchmark.mjs --service /bin/service --answer consumed --workload idle");
