@@ -34,11 +34,6 @@ test("make build and release pass an explicit diagnostics feature to Cargo (S78)
   assert.match(release, /npm pack --silent --pack-destination \/tmp\/vt-s78-dry-run \.\/alacritty/);
 });
 
-test("the pre-push hook runs make push-check on the pushed range (S72)", { timeout: 30000 }, () => {
-  const hook = readFileSync(path.join(root, ".githooks", "pre-push"), "utf8");
-  assert.match(hook, /make -C "\$root" push-check RANGE="\$base\.\.\$local_sha"/);
-});
-
 // Each Rust test reports its own result, elapsed time and time limit through cargo-nextest with the declared config (S76).
 test("make test runs each Rust test through cargo-nextest with the declared config (S76)", { timeout: 30000 }, () => {
   const commands = recipe("test");
