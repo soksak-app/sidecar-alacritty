@@ -2123,8 +2123,8 @@ async fn present_screen(
             )
             .map(|render| (layout, render))
     });
-    let render = match draw {
-        Ok((_, render)) => render,
+    let (layout, render) = match draw {
+        Ok(result) => result,
         Err(reason) => {
             // The failed screen is in no frame. It stays dirty, so the `screen` event names the
             // next frame, and the next change draws that frame. Clearing it would name the last
@@ -2169,7 +2169,7 @@ async fn present_screen(
         "raster": state.raster,
         "sequence": state.sequence
     });
-    state.render = render.map(|render| render.value(frame));
+    state.render = render.map(|render| render.value(frame.clone()));
     state.pending_draw = true;
     state.sent_surface = state.frame.id();
     state.sent_at = Some(std::time::Instant::now());
@@ -2197,12 +2197,26 @@ async fn present_screen(
             }
         }
     });
-    // The screen of the page is the screen that this raster drew. Both must be sent together so
-    // that the cursor and glyph state match the screen pixels. The state events of the inline
-    // images that this raster drew are sent after them.
+    // The raster shows the screen, so the page receives no screen for it. The page places the
+    // input method caret and the scrollbar from the cursor and the scrollback of the frame, which
+    // the `view` event sends after the raster when either differs from the last `view` event. The
+    // state events of the inline images that this raster drew are sent after them.
     match output_tx.send_carried(image_envelope.to_string()).await {
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
+    }
+    let mut cursor = json!(screen.cursor);
+    cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
+    let view = json!({"cursor": cursor, "scrollback": screen.scrollback});
+    if state.view_sent.as_ref() != Some(&view) {
+        let event = json!({
+            "surface": surface_id,
+            "body": {"event": "view", "frame": frame, "cursor": view["cursor"], "scrollback": view["scrollback"]}
+        });
+        if output_tx.send(event.to_string()).await.is_err() {
+            return false;
+        }
+        state.view_sent = Some(view);
     }
     for event in std::mem::take(&mut state.presentation_events) {
         if output_tx.send(event).await.is_err() {

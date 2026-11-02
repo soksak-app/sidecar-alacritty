@@ -37,6 +37,8 @@ pub struct ImageState {
     pub sent_at: Option<std::time::Instant>,
     /// The time at which the frame in flight was sent, which the frame clock counts from.
     pub presented_at: Option<tokio::time::Instant>,
+    /// The cursor and scrollback of the last `view` event, so that a frame that keeps both sends none.
+    pub view_sent: Option<serde_json::Value>,
     /// The store of the connection that carries a transfer image awaiting a reply. If the surface
     /// releases this state before the reply, it hands the transfer image to that store.
     pub carrier: Option<std::sync::Arc<crate::protocol::TransferStore>>,
@@ -97,6 +99,7 @@ impl ImageState {
             presentation_events: Vec::new(),
             sent_at: None,
             presented_at: None,
+            view_sent: None,
             carrier: None,
             session: None,
             sent_surface: 0,

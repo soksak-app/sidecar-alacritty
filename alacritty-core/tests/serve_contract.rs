@@ -46,7 +46,7 @@ where
 }
 
 /// Reads the next line, skipping the screen line that comes with a presentation.
-async fn next_line_except_screen<R: tokio::io::AsyncBufRead + Unpin>(
+async fn next_line_except_frame_events<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> String {
     loop {
@@ -55,7 +55,8 @@ async fn next_line_except_screen<R: tokio::io::AsyncBufRead + Unpin>(
             .expect("timeout waiting for a sidecar line")
             .expect("failed to read a sidecar line")
             .expect("the sidecar closed its output");
-        if !line.contains(r#""event":"screen""#) {
+        // A screen and the view of a frame describe the frame, not the reply of a request.
+        if !line.contains(r#""event":"screen""#) && !line.contains(r#""event":"view""#) {
             return line;
         }
     }
@@ -1521,7 +1522,7 @@ async fn ready_pty_echo_is_presented_with_the_transaction_preedit() {
     // The acknowledgement of the transaction arrives before or after its frame.
     if acknowledgements == acknowledgements_before_transaction {
         let reply: serde_json::Value =
-            serde_json::from_str(&next_line_except_screen(&mut lines).await).unwrap();
+            serde_json::from_str(&next_line_except_frame_events(&mut lines).await).unwrap();
         assert_eq!(reply["body"]["ack"], true);
     }
     let transaction_frames = frame_records.lock().unwrap()[frames_before_transaction..].to_vec();
@@ -2806,7 +2807,7 @@ async fn detaching_an_image_keeps_the_session_for_headless_open_and_later_image_
 
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"detach":{"request":"detach-1","name":"view","generation":1}}}}
 "#).await.unwrap();
-    let detached_line = next_line_except_screen(&mut lines).await;
+    let detached_line = next_line_except_frame_events(&mut lines).await;
     let detached: serde_json::Value = serde_json::from_str(&detached_line).unwrap();
     assert_eq!(detached["surface"], "s1", "{detached_line}");
     assert_eq!(
@@ -2891,7 +2892,7 @@ async fn an_image_response_with_wrong_frame_identity_does_not_release_a_newer_pe
 "#).await.unwrap();
     let mut stale_frames = Vec::new();
     loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"].get("image").is_some() {
             stale_frames.push(message["body"]["image"].clone());
@@ -3036,7 +3037,7 @@ async fn an_image_detach_request_id_cannot_be_reused_with_another_tuple() {
     to_serve.write_all(br#"{"surface":"first","body":{"image":{"detach":{"request":"invalid","name":"view","generation":0}}}}
 "#).await.unwrap();
     // A malformed detach with a readable request answers that request.
-    let invalid_line = next_line_except_screen(&mut lines).await;
+    let invalid_line = next_line_except_frame_events(&mut lines).await;
     let invalid: serde_json::Value = serde_json::from_str(&invalid_line).unwrap();
     assert_eq!(
         invalid["body"]["image"]["detached"]["request"], "invalid",
@@ -4328,7 +4329,7 @@ async fn test_configure_with_invalid_width_type() {
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":"800","height":384,"scale":1.0}}}}
 "#).await.unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4398,7 +4399,7 @@ async fn test_input_without_bytes_or_keys_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4464,7 +4465,7 @@ async fn test_legacy_input_bytes_field_is_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4530,7 +4531,7 @@ async fn test_legacy_input_keys_field_is_rejected() {
         .await
         .unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4592,7 +4593,7 @@ async fn test_replacement_raster_with_missing_height_is_rejected() {
     to_serve.write_all(br#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":2,"width":1024,"scale":1.0}}}}
 "#).await.unwrap();
 
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4805,7 +4806,7 @@ async fn test_zero_sized_configuration_is_rejected() {
 "#).await.unwrap();
 
     // Must receive an error response
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error JSON");
@@ -4896,7 +4897,7 @@ async fn test_replacement_raster_with_zero_size_is_rejected() {
 "#).await.unwrap();
 
     // Reads the response; it must be an error
-    let error_line = next_line_except_screen(&mut lines).await;
+    let error_line = next_line_except_frame_events(&mut lines).await;
 
     let error_json: serde_json::Value =
         serde_json::from_str(&error_line).expect("failed to parse error response");
@@ -6702,7 +6703,7 @@ async fn wait_for_reply<R: tokio::io::AsyncBufRead + Unpin>(
     letting_go: LettingGo,
 ) {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert!(message["body"].get("error").is_none(), "{line}");
         let replied = match letting_go {
@@ -6754,7 +6755,7 @@ async fn check_unanswered_transfer(persistent: bool, letting_go: LettingGo, rele
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#).await.unwrap();
     let id = loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if let Some(image) = message["body"].get("image") {
             assert_eq!(image["sequence"], 1, "{line}");
@@ -6906,7 +6907,7 @@ async fn next_image<R: tokio::io::AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
 ) -> serde_json::Value {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert!(message["body"].get("error").is_none(), "{line}");
         if let Some(image) = message["body"].get("image") {
@@ -6920,7 +6921,7 @@ async fn next_image_detach_reply<R: tokio::io::AsyncBufRead + Unpin>(
     request: &str,
 ) -> serde_json::Value {
     loop {
-        let line = next_line_except_screen(lines).await;
+        let line = next_line_except_frame_events(lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"]["image"]["detached"]["request"] == request {
             return message;
@@ -7015,7 +7016,7 @@ async fn a_detach_refused_as_a_stale_attachment_answers_its_request() {
         .unwrap();
     // The output of a surface goes to the connection that is attached to it, so the refusal of the
     // first connection is read from the second connection.
-    let line = next_line_except_screen(&mut second_lines).await;
+    let line = next_line_except_frame_events(&mut second_lines).await;
     let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(
         reply["body"]["image"]["detached"]["request"], "stale-detach",
@@ -7042,7 +7043,7 @@ async fn a_detach_refused_as_a_stale_attachment_answers_its_request() {
         .unwrap();
     // The answer to close is an empty body.
     loop {
-        let line = next_line_except_screen(&mut second_lines).await;
+        let line = next_line_except_frame_events(&mut second_lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["body"] == serde_json::json!({}) {
             break;
@@ -7082,7 +7083,7 @@ async fn a_malformed_detach_with_a_readable_request_answers_its_request() {
     to_serve.write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh"}}
 {"surface":"s1","body":{"image":{"detach":{"request":"malformed-detach","name":"view","generation":0}}}}
 "#).await.unwrap();
-    let line = next_line_except_screen(&mut lines).await;
+    let line = next_line_except_frame_events(&mut lines).await;
     let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(
         reply["body"]["image"]["detached"]["request"], "malformed-detach",
@@ -7405,7 +7406,7 @@ async fn a_screen_read_publishes_render_metadata_for_its_drawn_frame() {
     to_serve.write_all(br#"{"surface":"s1","body":{"operation":"font","family":"Menlo","size":14},"cids":["pending-render-input"]}
 "#).await.unwrap();
     loop {
-        let line = next_line_except_screen(&mut lines).await;
+        let line = next_line_except_frame_events(&mut lines).await;
         let message: serde_json::Value = serde_json::from_str(&line).unwrap();
         if message["cids"] == serde_json::json!(["pending-render-input"]) {
             break;
@@ -7580,7 +7581,7 @@ async fn a_failed_draw_keeps_the_screen_unsent_so_the_next_frame_names_it() {
         .write_all(format!("{compose}\n").as_bytes())
         .await
         .unwrap();
-    let failure = next_line_except_screen(&mut lines).await;
+    let failure = next_line_except_frame_events(&mut lines).await;
     assert!(
         failure.contains("frame draw failed by fault-injection"),
         "{failure}"
@@ -7824,6 +7825,66 @@ async fn a_leased_surface_is_not_drawn_into_until_the_host_releases_it() {
 // The sidecar sends no screen message for a frame and answers `screen.read` with the full screen
 // (the second screen form of core docs/spec/persistent-services.md): the raster shows the screen,
 // and the page reads the cells only when it needs them.
+#[tokio::test]
+async fn a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let factory_calls = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "view".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r##"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"light","background":"#e8f5ee","foreground":"#12684a","cursor":"#12684a","selection":"#d8dbe4"}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"dark","background":"#101418","foreground":"#e8f5ee","cursor":"#e8f5ee","selection":"#2a3038"}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
+"##;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    serve(engine_factory, reader, &mut writer, factory)
+        .await
+        .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    let lines: Vec<serde_json::Value> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let frames: Vec<u64> = lines
+        .iter()
+        .filter_map(|value| value["body"]["image"]["sequence"].as_u64())
+        .collect();
+    let views: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|value| value["body"]["event"] == "view")
+        .map(|value| &value["body"])
+        .collect();
+    assert_eq!(frames, vec![1, 2, 3], "each theme draws a frame: {output}");
+    // The second theme keeps the cursor and the scrollback of the second frame, so the third frame
+    // sends no view.
+    let sequences: Vec<&serde_json::Value> = views
+        .iter()
+        .map(|view| &view["frame"]["sequence"])
+        .collect();
+    assert_eq!(sequences, vec![1, 2], "{output}");
+    assert_ne!(
+        (&views[0]["cursor"], &views[0]["scrollback"]),
+        (&views[1]["cursor"], &views[1]["scrollback"]),
+        "{output}"
+    );
+    let view = views[0];
+    assert_eq!(view["frame"]["generation"], 1, "{view}");
+    assert!(view["cursor"]["caret"]["row"].is_u64(), "{view}");
+    assert!(view["cursor"]["caret"]["col"].is_u64(), "{view}");
+    assert!(view["cursor"]["visible"].is_boolean(), "{view}");
+    assert!(view["scrollback"]["history"].is_u64(), "{view}");
+    assert!(view["scrollback"]["offset"].is_u64(), "{view}");
+}
+
 #[tokio::test]
 async fn a_frame_sends_no_screen_message_and_a_screen_read_answers_the_full_screen() {
     let calls = Arc::new(Mutex::new(Calls::default()));
