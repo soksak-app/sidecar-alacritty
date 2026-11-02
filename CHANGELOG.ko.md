@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-12: sidecar를 0.0.2로 release하고 registry에 등록했다.
 - S1-11: session의 image surface는 바뀐 행만 다시 그리는 GPU frame으로 그린다.
 - S1-9: screen의 셀은 색을 RGB byte로, grapheme을 inline으로 가지므로 frame의 screen을 만들 때 셀마다 할당하지 않는다.
 - S1-8: event log가 record를 저장하지 않는 frame은 hash하지 않는다.
