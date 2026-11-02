@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub struct Arguments {
     /// The directory of the endpoint and the lock of the service.
     pub service_dir: PathBuf,
-    /// The directory of the event files `vt-<boot>.jsonl`.
+    /// The directory of the event files `alacritty-<boot>.jsonl`.
     pub log_dir: PathBuf,
 }
 
@@ -37,7 +37,7 @@ pub fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Arguments, S
     Ok(Arguments {
         service_dir: service_dir.ok_or("--service-dir is required")?,
         log_dir: log_dir.ok_or(
-            "--log-dir is required: the service writes its events to <log-dir>/vt-<boot>.jsonl",
+            "--log-dir is required: the service writes its events to <log-dir>/alacritty-<boot>.jsonl",
         )?,
     })
 }

@@ -43,7 +43,7 @@ fn a_blocked_runtime_is_recorded_with_the_stacks_of_its_threads_and_its_end() {
     assert_eq!(dump.len(), 1);
     let path = dump[0]["fields"]["path"].as_str().unwrap();
     assert!(
-        path.contains("stall-vt-"),
+        path.contains("stall-alacritty-"),
         "the dump file is named after the service: {path}"
     );
     assert_eq!(dumps.lock().unwrap().len(), 1);

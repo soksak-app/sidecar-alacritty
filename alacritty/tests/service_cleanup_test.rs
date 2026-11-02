@@ -275,7 +275,7 @@ fn startup_uses_embedded_identity_before_argument_validation() {
     );
     let stderr = String::from_utf8(output.stderr).expect("service standard error is UTF-8");
     assert!(
-        stderr.contains("info sidecar vt: started"),
+        stderr.contains("info sidecar alacritty: started"),
         "start record is missing: {stderr:?}"
     );
     assert!(

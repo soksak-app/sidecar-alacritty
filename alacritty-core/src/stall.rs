@@ -83,12 +83,12 @@ where
     Ok(())
 }
 
-/// The file of a dump: `stall-vt-<pid>-<ms>.txt` in the logs folder, the form of the dumps of the host.
+/// The file of a dump: `stall-alacritty-<pid>-<ms>.txt` in the logs folder, the form of the dumps of the host.
 fn dump_path(folder: &Path) -> PathBuf {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis());
-    folder.join(format!("stall-vt-{}-{ms}.txt", std::process::id()))
+    folder.join(format!("stall-alacritty-{}-{ms}.txt", std::process::id()))
 }
 
 #[cfg(test)]

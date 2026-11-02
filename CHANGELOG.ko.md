@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-16: service의 시작 기록과 stall dump는 sidecar를 `alacritty`로 적는다.
 - S1-15: `make test`는 diagnostics build의 frame test를 모두 실행한다.
 - S1-14: `make frame-benchmark`는 빌드한 service의 CPU 시간과 footprint를 잰다.
 - S1-13: frame은 GPU pass 없이 그린다. 부하가 걸린 service의 메모리가 같은 CPU 시간으로 196 MB에서 40 MB로 줄었다.

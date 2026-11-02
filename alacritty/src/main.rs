@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
     // the time from the spawn of the process to its first own record is visible (S69). The record goes to the standard
     // error and not to the event file, because the file of the contract starts with log.open and the writer that writes it
     // exists only after the setup reads the arguments and the platform.
-    eprintln!("{} info sidecar vt: started", text_record_time());
+    eprintln!("{} info sidecar alacritty: started", text_record_time());
     #[cfg(target_os = "macos")]
     process_identity::set_process_display_name(env!("SOKSAK_SIDECAR_DISPLAY_NAME"))
         .map_err(invalid_input)?;

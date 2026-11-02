@@ -2,7 +2,7 @@
 //!
 //! A producer pushes an event to a queue bounded by count and by bytes without waiting. One writer thread assigns `seq`,
 //! serializes the JSON line, writes batches, rotates the file and records the events that the queue refused as
-//! `log.dropped`. The file is `<log-dir>/vt-<boot>.jsonl`; every event has the layer `sidecar` and a name that starts
+//! `log.dropped`. The file is `<log-dir>/alacritty-<boot>.jsonl`; every event has the layer `sidecar` and a name that starts
 //! with `sidecar.alacritty.`.
 
 use std::fs::{File, OpenOptions};

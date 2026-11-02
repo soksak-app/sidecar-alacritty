@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-16: The start record and the stall dump of the service name the sidecar `alacritty`.
 - S1-15: `make test` runs every frame test of the diagnostics build.
 - S1-14: `make frame-benchmark` measures the CPU time and the footprint of a built service.
 - S1-13: A frame draws without a GPU pass, which lowers the memory of a loaded service from 196 MB to 40 MB at the same CPU time.

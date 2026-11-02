@@ -173,7 +173,7 @@ fn start_record(stderr: &str) -> time::OffsetDateTime {
     assert_eq!(parts.len(), 5, "{message}");
     assert_eq!(parts[1], "info", "{message}");
     assert_eq!(parts[2], "sidecar", "{message}");
-    assert_eq!(parts[3], "vt:", "{message}");
+    assert_eq!(parts[3], "alacritty:", "{message}");
     assert_eq!(parts[4], "started", "{message}");
     // The form of the time of a text record: the UTC time `YYYY-MM-DDTHH:MM:SS.mmmZ` of the diagnostics specification of
     // the soksak core repository (docs/spec/diagnostics.md#forms).
