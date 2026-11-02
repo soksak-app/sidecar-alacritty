@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-8: event log가 record를 저장하지 않는 frame은 hash하지 않는다.
 - S1-6: process group test는 macOS가 signal을 거부하는 exit 단계를 기다린다.
 - S1-4: sidecar는 `soksak-app/sidecar-alacritty`로 공개되고, 0.0.1로 release되고, registry에 등록됐다.
 - S1-7: 그린 frame은 커서, caret, scrollback이 바뀌면 그것을 담은 `view` 이벤트를 보낸다.

@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-8: A frame whose record the event log does not store is not hashed.
 - S1-6: The process group test waits for the exit stage at which macOS refuses signals.
 - S1-4: The sidecar is public as `soksak-app/sidecar-alacritty`, released as 0.0.1 and listed in the registry.
 - S1-7: A drawn frame sends a `view` event with its cursor, caret and scrollback when they change.
