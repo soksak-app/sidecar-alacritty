@@ -67,8 +67,10 @@ fn remove_folder(path: &Path) -> Result<(), String> {
 /// The folder of a test, removed before the test starts so that a folder of an earlier run with the same process id is
 /// not used. The returned folder is removed when it is dropped.
 fn directory(name: &str) -> Folder {
-    let path =
-        std::env::temp_dir().join(format!("vt-event-contract-{name}-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "alacritty-event-contract-{name}-{}",
+        std::process::id()
+    ));
     let folder = Folder {
         config: config_folder(&path),
         path,
@@ -172,7 +174,7 @@ fn the_levels_of_the_debug_channel_go_to_the_debug_file_with_one_seq_across_both
     assert!(log.emit(Level::Warn, "sidecar.alacritty.test", &json!({"index": 4})));
     log.flush(DEADLINE).unwrap();
     let main = lines_of(log.path());
-    let debug_path = dir.join("vt-b1.debug.jsonl");
+    let debug_path = dir.join("alacritty-b1.debug.jsonl");
     let debug = lines_of(&debug_path);
     assert_eq!(
         debug[0]["event"], "log.open",
@@ -214,7 +216,7 @@ fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot()
     let log = EventLog::start(options(&dir)).unwrap();
     log.flush(DEADLINE).unwrap();
     let lines = lines_of(log.path());
-    assert_eq!(log.path(), dir.join("vt-b1.jsonl"));
+    assert_eq!(log.path(), dir.join("alacritty-b1.jsonl"));
     let golden = &fixture_lines("key.jsonl")[0];
     assert_eq!(golden["event"], "log.open");
     let open = &lines[0];
@@ -225,7 +227,7 @@ fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot()
     assert_eq!(open["fields"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(open["fields"].get("policy"), None, "log.policy states it");
     assert_eq!(open["fields"]["pid"], std::process::id());
-    assert_eq!(open["fields"]["role"], "vt");
+    assert_eq!(open["fields"]["role"], "alacritty");
     assert_eq!(open["fields"]["boot"], "b1");
     // The golden `log.open` declares the same fields with the same types.
     for (field, value) in golden["fields"].as_object().unwrap() {
@@ -444,13 +446,13 @@ fn a_full_file_rotates_and_the_next_file_continues_seq() {
     let rotated = &current[1]["fields"];
     assert_eq!(rotated["kept"], 2);
     assert!(rotated["bytes"].as_u64().unwrap() <= 2000);
-    let first = lines_of(&dir.join("vt-b1.jsonl.1"));
+    let first = lines_of(&dir.join("alacritty-b1.jsonl.1"));
     assert_eq!(
         current[0]["seq"].as_u64().unwrap(),
         first.last().unwrap()["seq"].as_u64().unwrap() + 1
     );
-    assert!(dir.join("vt-b1.jsonl.2").exists());
-    assert!(!dir.join("vt-b1.jsonl.3").exists());
+    assert!(dir.join("alacritty-b1.jsonl.2").exists());
+    assert!(!dir.join("alacritty-b1.jsonl.3").exists());
 }
 
 // The hex of a chunk holds every byte: nothing is cut, because a defect of the input is located from what was written.
@@ -490,10 +492,10 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
 fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     let dir = directory("schema");
     std::fs::create_dir_all(&*dir).unwrap();
-    let path = dir.join("vt-old.jsonl");
+    let path = dir.join("alacritty-old.jsonl");
     std::fs::write(
         &path,
-        "{\"ts_us\":1,\"seq\":1,\"level\":\"info\",\"layer\":\"sidecar\",\"event\":\"log.open\",\"fields\":{\"schema\":1,\"pid\":1,\"role\":\"vt\",\"boot\":\"b\"}}\n",
+        "{\"ts_us\":1,\"seq\":1,\"level\":\"info\",\"layer\":\"sidecar\",\"event\":\"log.open\",\"fields\":{\"schema\":1,\"pid\":1,\"role\":\"alacritty\",\"boot\":\"b\"}}\n",
     )
     .unwrap();
     let error = read_lines(&path).unwrap_err();
@@ -501,7 +503,7 @@ fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     assert!(error.contains("schema 1"), "{error}");
     assert!(error.contains("2"), "{error}");
     // A file that does not open with log.open names what it found.
-    let other = dir.join("vt-other.jsonl");
+    let other = dir.join("alacritty-other.jsonl");
     std::fs::write(&other, "{\"event\":\"sidecar.alacritty.frame\"}\n").unwrap();
     let error = read_lines(&other).unwrap_err();
     assert!(error.contains(&other.display().to_string()), "{error}");
@@ -558,13 +560,17 @@ fn a_line_without_seq_is_refused_by_the_run_reader() {
     std::fs::create_dir_all(&*dir).unwrap();
     let open = json!({"ts_us": 1, "mono_ns": 1, "seq": 1, "level": "info", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "alacritty", "boot": "b1", "pid": 1}});
     let without_seq = json!({"ts_us": 2, "mono_ns": 2, "level": "info", "layer": "sidecar", "event": "sidecar.alacritty.test", "fields": {}});
-    let main = dir.join("vt-b1.jsonl");
+    let main = dir.join("alacritty-b1.jsonl");
     std::fs::write(&main, format!("{open}\n{without_seq}\n")).unwrap();
     let debug_open = json!({"ts_us": 3, "mono_ns": 3, "seq": 2, "level": "debug", "layer": "sidecar", "event": "log.open", "fields": {"schema": 2, "role": "alacritty", "boot": "b1", "pid": 1}});
-    std::fs::write(dir.join("vt-b1.debug.jsonl"), format!("{debug_open}\n")).unwrap();
+    std::fs::write(
+        dir.join("alacritty-b1.debug.jsonl"),
+        format!("{debug_open}\n"),
+    )
+    .unwrap();
     let error = read_run_lines(&main).expect_err("the run reader ordered a line without seq");
     assert!(
-        error.contains("vt-b1.jsonl:2"),
+        error.contains("alacritty-b1.jsonl:2"),
         "the error does not name the line: {error}"
     );
 }

@@ -26,7 +26,7 @@ use crate::policy::{Class, Gate, Policy, is_being_written, parse_policy};
 pub const SCHEMA: u64 = 2;
 
 /// The role of this process in the name of its file and in `log.open`.
-pub const ROLE: &str = "vt";
+pub const ROLE: &str = "alacritty";
 
 /// The layer of every event of this process.
 const LAYER: &str = "sidecar";

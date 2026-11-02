@@ -13,7 +13,10 @@ const DEADLINE: Duration = Duration::from_secs(10);
 static PROCESS_LIMIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn directory(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("vt-event-failure-{name}-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "alacritty-event-failure-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&path);
     path
 }
@@ -128,5 +131,5 @@ fn a_failed_rotation_step_is_an_error_record_in_the_file() {
     assert_eq!(record["fields"]["where"], "event writer");
     let text = record["fields"]["text"].as_str().unwrap();
     assert!(text.contains("rotation could not move"), "{text}");
-    assert!(text.contains("vt-b1.jsonl"), "{text}");
+    assert!(text.contains("alacritty-b1.jsonl"), "{text}");
 }

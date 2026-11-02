@@ -33,7 +33,7 @@ test("the catalog declares the layer sidecar and events of the form sidecar.alac
   assert.deepEqual(catalog.layers, ["sidecar"]);
   assert.ok(Object.keys(catalog.events).length > 0);
   for (const [name, event] of Object.entries(catalog.events)) {
-    assert.match(name, /^sidecar\.vt\.[a-z_]+(\.[a-z_]+)*$/, name);
+    assert.match(name, /^sidecar\.alacritty\.[a-z_]+(\.[a-z_]+)*$/, name);
     assert.equal(event.layer, "sidecar", name);
     assert.ok(CLASSES.includes(event.class), `${name}: class ${event.class}`);
     for (const level of [event.level].flat()) assert.ok(LEVELS.includes(level), `${name}: level ${level}`);
@@ -67,7 +67,7 @@ test("every declared event is named by a source of alacritty-core", () => {
 test("every event that a source of alacritty-core names is declared", () => {
   const found = new Set();
   for (const text of sources().values()) {
-    for (const [, name] of text.matchAll(/"(sidecar\.vt\.[a-z_.]*[a-z_])"/g)) found.add(name);
+    for (const [, name] of text.matchAll(/"(sidecar\.alacritty\.[a-z_.]*[a-z_])"/g)) found.add(name);
   }
   const undeclared = [...found].filter((name) => catalog.events[name] === undefined);
   assert.deepEqual(undeclared, [], "events that no catalog entry declares");
@@ -86,7 +86,7 @@ test("the manifest declares the replay executable of the role vt, the events of 
   const manifest = JSON.parse(readFileSync(join(root, "alacritty/sidecar.json"), "utf8"));
   const packed = JSON.parse(readFileSync(join(root, "alacritty/package.json"), "utf8")).files;
   assert.deepEqual(manifest.replay, {
-    role: "vt",
+    role: "alacritty",
     executable: "build/soksak-alacritty-replay",
     // Each kind of replay input names the event that stores it (core docs/spec/sidecars.md, replay).
     inputs: {

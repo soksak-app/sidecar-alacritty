@@ -42,7 +42,8 @@ impl Drop for Folder {
 /// The configuration folder of a service: its policy file stores every level of every class, so the events below error that
 /// the checks read are stored. The returned folder is removed when it is dropped.
 fn directory(name: &str) -> Folder {
-    let path = std::env::temp_dir().join(format!("vt-log-dir-{name}-{}", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("alacritty-log-dir-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create the test directory");
     std::fs::write(
@@ -293,14 +294,14 @@ fn a_service_with_log_dir_writes_log_open_and_flushes_it_when_it_ends() {
     assert_eq!(files.len(), 1, "{files:?}");
     let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
     assert!(
-        name.starts_with("vt-") && name.ends_with(&format!("-{}.jsonl", pid)),
+        name.starts_with("alacritty-") && name.ends_with(&format!("-{}.jsonl", pid)),
         "{name}"
     );
     let text = std::fs::read_to_string(&files[0]).expect("read the event file");
     let open: serde_json::Value =
         serde_json::from_str(text.lines().next().expect("a first line")).expect("JSON line");
     assert_eq!(open["event"], "log.open");
-    assert_eq!(open["fields"]["role"], "vt");
+    assert_eq!(open["fields"]["role"], "alacritty");
     assert_eq!(open["fields"]["pid"], pid);
     let events: Vec<serde_json::Value> = text
         .lines()
