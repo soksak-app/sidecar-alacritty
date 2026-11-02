@@ -32,7 +32,8 @@ fn screen_of(message: &Value) -> Option<Screen> {
     for (index, cell) in message["cells"].as_array().unwrap().iter().enumerate() {
         let color = |value: &Value| match value {
             Value::Null => Some(None),
-            Value::String(text) => Some(Some(text.clone())),
+            Value::String(text) => soksak_sidecar_alacritty_core::palette::parse_hex(text)
+                .map(|rgb| Some(soksak_sidecar_alacritty_core::Rgb(rgb))),
             _ => None,
         };
         let attributes = cell["attributes"].as_u64().unwrap();
@@ -41,7 +42,7 @@ fn screen_of(message: &Value) -> Option<Screen> {
         }
         let grapheme = cell["grapheme"].as_str().unwrap();
         lines[index / cols as usize].push(Cell {
-            ch: (!grapheme.is_empty()).then(|| grapheme.to_string()),
+            ch: (!grapheme.is_empty()).then(|| grapheme.into()),
             width: cell["width"].as_u64().unwrap() as u8,
             fg: color(&cell["fg"])?,
             bg: color(&cell["bg"])?,

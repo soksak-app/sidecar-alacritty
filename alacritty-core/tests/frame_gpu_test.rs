@@ -13,11 +13,11 @@ fn filled_screen(shape: CursorShape) -> Screen {
     let mut lines: Vec<Vec<Cell>> = (0..rows)
         .map(|_| (0..cols).map(|_| Cell::default()).collect())
         .collect();
-    lines[0][1].bg = Some("#cc3311".to_string());
-    lines[0][2].bg = Some("#cc3311".to_string());
-    lines[1][3].fg = Some("#11aa44".to_string());
+    lines[0][1].bg = Some(soksak_sidecar_alacritty_core::Rgb([0xcc, 0x33, 0x11]));
+    lines[0][2].bg = Some(soksak_sidecar_alacritty_core::Rgb([0xcc, 0x33, 0x11]));
+    lines[1][3].fg = Some(soksak_sidecar_alacritty_core::Rgb([0x11, 0xaa, 0x44]));
     lines[1][3].inverse = true;
-    lines[2][0].bg = Some("#2255ee".to_string());
+    lines[2][0].bg = Some(soksak_sidecar_alacritty_core::Rgb([0x22, 0x55, 0xee]));
     lines[2][0].width = 2;
     lines[2][1].width = 0;
     lines[2][5].inverse = true;
@@ -108,15 +108,15 @@ fn text_screen() -> Screen {
     ];
     for (row, line) in texts.iter().enumerate() {
         for (col, text) in line.iter().enumerate() {
-            screen.lines[row][col].ch = (!text.is_empty()).then(|| text.to_string());
+            screen.lines[row][col].ch = (!text.is_empty()).then(|| (*text).into());
         }
     }
     screen.lines[1][0].width = 2;
     screen.lines[1][1].width = 0;
-    screen.lines[1][2].bg = Some("#335577".to_string());
+    screen.lines[1][2].bg = Some(soksak_sidecar_alacritty_core::Rgb([0x33, 0x55, 0x77]));
     screen.lines[0][3].underline = true;
     screen.lines[0][5].link = Some("https://example.com".to_string());
-    screen.lines[2][4].fg = Some("#ffcc00".to_string());
+    screen.lines[2][4].fg = Some(soksak_sidecar_alacritty_core::Rgb([0xff, 0xcc, 0x00]));
     screen.lines[2][5].inverse = true;
     screen
 }
@@ -151,7 +151,7 @@ fn the_gpu_frame_draws_text_with_the_pixels_of_the_cpu_frame_across_draws() {
     // adds a preedit, which the layout places in the cells of the cursor row.
     for step in 0..3 {
         if step == 1 {
-            screen.lines[2][3].ch = Some("#".to_string());
+            screen.lines[2][3].ch = Some("#".into());
             screen.cursor.col = 4;
             screen.cursor.row = 1;
         }
@@ -273,7 +273,7 @@ fn the_gpu_frame_draws_only_the_strips_of_changed_rows() {
         0,
         "an unchanged screen draws no strip"
     );
-    screen.lines[2][3].ch = Some("#".to_string());
+    screen.lines[2][3].ch = Some("#".into());
     screen.cursor.row = 2;
     frame
         .draw_with_theme(&screen, &metrics, cursor, &theme)

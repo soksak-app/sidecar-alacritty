@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-9: screen의 셀은 색을 RGB byte로, grapheme을 inline으로 가지므로 frame의 screen을 만들 때 셀마다 할당하지 않는다.
 - S1-8: event log가 record를 저장하지 않는 frame은 hash하지 않는다.
 - S1-6: process group test는 macOS가 signal을 거부하는 exit 단계를 기다린다.
 - S1-4: sidecar는 `soksak-app/sidecar-alacritty`로 공개되고, 0.0.1로 release되고, registry에 등록됐다.
