@@ -324,6 +324,10 @@ impl Engine for MockEngine {
         }
     }
 
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        None
+    }
+    fn stop_sync(&mut self) {}
     fn modes(&self) -> Modes {
         self.custom_modes.clone().unwrap_or_default()
     }
@@ -5291,6 +5295,10 @@ async fn test_panicking_surface_reports_error() {
             }
         }
 
+        fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+            None
+        }
+        fn stop_sync(&mut self) {}
         fn modes(&self) -> Modes {
             Modes::default()
         }

@@ -143,6 +143,10 @@ impl Engine for FakeEngine {
         }
     }
 
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        None
+    }
+    fn stop_sync(&mut self) {}
     fn modes(&self) -> Modes {
         Modes::default()
     }

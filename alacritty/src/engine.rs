@@ -2095,6 +2095,23 @@ impl Engine for AlacrittyEngine {
         self.dropped + self.term.grid().history_size() as i64
     }
 
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        self.processor
+            .sync_timeout()
+            .sync_timeout()
+            .map(tokio::time::Instant::from_std)
+    }
+
+    fn stop_sync(&mut self) {
+        // The library processes the held bytes in one call, so the count covers them as it covers a
+        // slice of a feed.
+        self.term
+            .grid_mut()
+            .update_history(self.history_limit + COUNTED_ROWS);
+        self.processor.stop_sync(&mut self.term);
+        self.count_pushed_rows();
+    }
+
     fn modes(&self) -> Modes {
         let mode = self.term.mode();
         Modes {

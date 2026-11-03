@@ -33,6 +33,10 @@ struct TraceEngine {
     refill: Refill,
     // The screen places its cursor on the row after the last, which the screen hash refuses.
     unhashable: bool,
+    // The deadline of the synchronized update that `?2026h` opens, as the library sets it.
+    held_until: Option<tokio::time::Instant>,
+    // The times at which the surface ended a synchronized update.
+    sync_stops: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
 }
 
 type Refill = Arc<std::sync::Mutex<Option<Flood>>>;
@@ -45,6 +49,9 @@ struct Flood {
     outputs: mpsc::Sender<soksak_sidecar_alacritty_core::protocol::DaemonEvent>,
     sent: usize,
 }
+
+/// The time after which the library ends a synchronized update that is not ended (150 ms).
+const SYNC_UPDATE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(150);
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
@@ -67,6 +74,9 @@ impl Engine for TraceEngine {
             flood.sent += 1;
             // A full channel already holds the next output.
             let _ = flood.outputs.try_send(daemon_output(b"x"));
+        }
+        if contains(bytes, b"\x1b[?2026h") {
+            self.held_until = Some(tokio::time::Instant::now() + SYNC_UPDATE_TIMEOUT);
         }
         if contains(bytes, b"\x1b[?1000h") {
             self.modes.mouse_click = true;
@@ -142,6 +152,16 @@ impl Engine for TraceEngine {
             background: "#1e1e1e".to_string(),
             lines: Vec::new(),
         }
+    }
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        self.held_until
+    }
+    fn stop_sync(&mut self) {
+        self.held_until = None;
+        self.sync_stops
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
     }
     fn modes(&self) -> Modes {
         self.modes.clone()
@@ -553,6 +573,10 @@ impl Engine for InlineImageEngine {
     fn screen(&mut self) -> Screen {
         self.inner.screen()
     }
+    fn sync_deadline(&self) -> Option<tokio::time::Instant> {
+        None
+    }
+    fn stop_sync(&mut self) {}
     fn modes(&self) -> Modes {
         self.inner.modes()
     }
@@ -1618,6 +1642,7 @@ struct LeasedSurface {
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     screens: Arc<std::sync::atomic::AtomicUsize>,
     refill: Refill,
+    sync_stops: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
 }
 
 async fn serve_leased() -> LeasedSurface {
@@ -1626,10 +1651,13 @@ async fn serve_leased() -> LeasedSurface {
     let built = Arc::clone(&screens);
     let refill = Refill::default();
     let engine_refill = Arc::clone(&refill);
+    let sync_stops = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let stops = Arc::clone(&sync_stops);
     let engine_factory = Arc::new(move || {
         Box::new(TraceEngine {
             screens: Arc::clone(&built),
             refill: Arc::clone(&engine_refill),
+            sync_stops: Arc::clone(&stops),
             ..TraceEngine::default()
         }) as Box<dyn Engine>
     });
@@ -1687,6 +1715,7 @@ async fn serve_leased() -> LeasedSurface {
         frames,
         screens,
         refill,
+        sync_stops,
     };
     surface.wait_frames(1).await;
     surface
@@ -1780,6 +1809,37 @@ async fn the_frame_clock_draws_output_without_input_at_most_once_in_33_ms() {
             pair[1] - pair[0]
         );
     }
+}
+
+// A synchronized update that is never ended is ended by the frame clock at its deadline, 150 ms
+// after the opening sequence, and the output that it held is drawn. No event reports the end of an
+// update that never ends, so the timer for the deadline exists only while an update is held.
+#[tokio::test(start_paused = true)]
+async fn the_frame_clock_ends_a_synchronized_update_at_its_deadline() {
+    let surface = serve_leased().await;
+    let started = tokio::time::Instant::now();
+    surface
+        .outputs
+        .send(daemon_output(b"\x1b[?2026hheld"))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let stops = surface.sync_stops.lock().unwrap().clone();
+    assert_eq!(
+        stops.len(),
+        1,
+        "the held update was not ended at its deadline"
+    );
+    assert_eq!(
+        stops[0] - started,
+        std::time::Duration::from_millis(150),
+        "the held update ended at another time than its deadline"
+    );
+    let frames = surface.frames.lock().unwrap().clone();
+    assert!(
+        frames.iter().any(|frame| *frame >= stops[0]),
+        "no frame draws the output of the ended update: {frames:?}"
+    );
 }
 
 // Output that the frame clock holds builds no screen, because a screen copies the whole grid: the

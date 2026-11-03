@@ -1,5 +1,6 @@
 # Changelog
 
+- S78: 닫히지 않은 synchronized update(DEC 2026)는 여는 sequence 뒤 150 ms인 기한에 끝난다. frame clock이 `stop_sync`를 호출해 잡힌 출력을 그리며, 타이머는 update가 잡혀 있는 동안에만 존재한다.
 - S77: history 상한에서도 inline image가 출력과 함께 움직인다. scroll generation이 상한이 버린 줄을 세고, 모든 입력의 줄은 999 byte 단위로 세어져서 flood가 줄마다 할당하지 않고 cache된 줄을 재사용한다.
 - S76: OSC 4의 잘못된 색과 OSC 52의 잘못된 target, data, encoding은 payload를 담지 않은 고정된 이유의 `sequence.rejected`를 낸다. 전에는 debug 줄만 남겼다.
 - S75: `vte::Parser` 하나가 terminal 앞에서 sequence를 찾아, CAN, SUB로 끝난 OSC가 뒤의 출력이나 mark를 잡아 두지 않고, 제어 byte가 든 erase는 제자리에서 지우며, 알 수 없는 CSI, DCS, ESC는 payload 없이 `sequence.rejected`를 내고, 1402200 byte를 넘는 sequence는 거부된다.

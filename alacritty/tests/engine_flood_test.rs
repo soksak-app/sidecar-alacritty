@@ -42,6 +42,9 @@ const CHUNKS: usize = 16;
 
 /// A chunk that recycles the rows of the history allocates no row per line.
 const FLOOD_ALLOCATIONS_PER_CHUNK: usize = 64;
+/// The bound on what a flood adds above a full history: the rows that the library caches, 1000 rows
+/// of 80 cells of 24 bytes, with the same again for the rows and the allocator granularity.
+const FLOOD_PEAK_BOUND: usize = 4 * 1024 * 1024;
 
 /// The held sequence and the buffer of the parser each grow by doubling up to the bound of a
 /// sequence, about 1.4 MiB.
@@ -85,4 +88,54 @@ fn a_flood_at_the_history_limit_allocates_no_rows_per_chunk() {
         allocated <= CHUNKS * FLOOD_ALLOCATIONS_PER_CHUNK,
         "{allocated} allocations for {CHUNKS} chunks"
     );
+}
+
+#[test]
+fn the_end_of_a_held_update_keeps_at_most_the_cached_rows() {
+    let _measuring = MEASURING.lock().expect("measurement lock is not poisoned");
+    let mut engine = AlacrittyEngine::new();
+    for _ in 0..2 {
+        engine.feed(&b"y\n".repeat(30_000));
+    }
+    let mut held = b"\x1b[?2026h".to_vec();
+    held.extend(b"y\n".repeat(1024 * 1024 - 8));
+    engine.feed(&held);
+    let live = LIVE.load(Ordering::Relaxed);
+    PEAK.store(live, Ordering::Relaxed);
+    engine.stop_sync();
+    let peak = PEAK.load(Ordering::Relaxed) - live;
+    println!("the end of a held update: peak {peak} bytes over a full history");
+    assert!(
+        peak <= FLOOD_PEAK_BOUND,
+        "peak {peak} bytes over a full history"
+    );
+}
+
+#[test]
+fn rows_past_the_count_of_a_held_update_are_reported() {
+    let mut engine = AlacrittyEngine::new();
+    for _ in 0..2 {
+        engine.feed(&b"y\n".repeat(30_000));
+    }
+    engine.drain_events();
+    let mut held = b"\x1b[?2026h".to_vec();
+    held.extend(b"y\n".repeat(5_000));
+    engine.feed(&held);
+    engine.stop_sync();
+    let events = engine.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, soksak_sidecar_alacritty_core::EngineEvent::Error(reason) if reason.contains("row count may be low"))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn a_flood_of_line_feeds_reports_no_lost_rows() {
+    let mut engine = AlacrittyEngine::new();
+    for _ in 0..2 {
+        engine.feed(&b"\n".repeat(30_000));
+    }
+    assert!(engine.drain_events().is_empty());
 }
