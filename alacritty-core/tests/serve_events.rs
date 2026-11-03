@@ -29,8 +29,21 @@ struct TraceEngine {
     runtime_error: Option<String>,
     // The modes that the output of the program sets with `?1000h`, `?1000l` and `?1006h`.
     modes: Modes,
+    // Each feed sends one more output through this channel, so output never stops arriving.
+    refill: Refill,
     // The screen places its cursor on the row after the last, which the screen hash refuses.
     unhashable: bool,
+}
+
+type Refill = Arc<std::sync::Mutex<Option<Flood>>>;
+
+// The outputs that a flood sends before it stops. The limit ends the flood of a surface that never
+// ends its turn, so the test fails by its assertion instead of stalling.
+const FLOOD_LIMIT: usize = 1000;
+
+struct Flood {
+    outputs: mpsc::Sender<soksak_sidecar_alacritty_core::protocol::DaemonEvent>,
+    sent: usize,
 }
 
 fn contains(bytes: &[u8], needle: &[u8]) -> bool {
@@ -48,6 +61,13 @@ impl Engine for TraceEngine {
         Ok(())
     }
     fn feed(&mut self, bytes: &[u8]) {
+        if let Some(flood) = self.refill.lock().unwrap().as_mut()
+            && flood.sent < FLOOD_LIMIT
+        {
+            flood.sent += 1;
+            // A full channel already holds the next output.
+            let _ = flood.outputs.try_send(daemon_output(b"x"));
+        }
         if contains(bytes, b"\x1b[?1000h") {
             self.modes.mouse_click = true;
         }
@@ -1597,15 +1617,19 @@ struct LeasedSurface {
     requests: mpsc::Sender<Vec<u8>>,
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     screens: Arc<std::sync::atomic::AtomicUsize>,
+    refill: Refill,
 }
 
 async fn serve_leased() -> LeasedSurface {
     let events = TestEvents::new();
     let screens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let built = Arc::clone(&screens);
+    let refill = Refill::default();
+    let engine_refill = Arc::clone(&refill);
     let engine_factory = Arc::new(move || {
         Box::new(TraceEngine {
             screens: Arc::clone(&built),
+            refill: Arc::clone(&engine_refill),
             ..TraceEngine::default()
         }) as Box<dyn Engine>
     });
@@ -1662,6 +1686,7 @@ async fn serve_leased() -> LeasedSurface {
         requests,
         frames,
         screens,
+        refill,
     };
     surface.wait_frames(1).await;
     surface
@@ -1809,5 +1834,32 @@ async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
                 frame["fields"]["sequence"].clone()
             ))
             .collect::<Vec<_>>()
+    );
+}
+
+// The surface consumes one output per turn, so an input request ends while output keeps arriving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_input_request_ends_during_a_flood_of_output() {
+    let surface = serve_leased().await;
+    *surface.refill.lock().unwrap() = Some(Flood {
+        outputs: surface.outputs.clone(),
+        sent: 0,
+    });
+    surface.outputs.send(daemon_output(b"x")).await.unwrap();
+    surface
+        .requests
+        .send(
+            br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#
+            .to_vec(),
+        )
+        .await
+        .unwrap();
+    wait_events(&surface.events, "sidecar.alacritty.pty_write", 1, |_| true).await;
+    let flood = surface.refill.lock().unwrap().take().unwrap();
+    assert!(
+        flood.sent < FLOOD_LIMIT,
+        "the input ended after the flood consumed all {} outputs",
+        flood.sent
     );
 }

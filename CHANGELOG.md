@@ -1,5 +1,6 @@
 # Changelog
 
+- S73-6: The surface consumes one chunk of output per turn, so an input request ends during a flood of output.
 - S73-5: Close follows the table of the specification: queued input completes with `session closed`, a close that is requested decides the reason when the reaper reports the child, and close sends SIGHUP to the child before the SIGKILL of its group and child.
 - S73-4: The end of a child sends its last output before `Exit`, fails queued input with `child exited`, closes the masters, and the surface draws the screen that the frame clock holds before it ends.
 - S73-3-1: The bound of queued input is checked under the queue lock, so a concurrent write is never refused for bytes that another write takes back; a test session sets its bound with `PtyService::with_input_bound`.
