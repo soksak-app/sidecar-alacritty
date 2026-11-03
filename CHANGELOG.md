@@ -1,5 +1,6 @@
 # Changelog
 
+- S91: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
 - S90: The `view` event carries the grid of its frame.
 - S89: The flood test of an input request has no bound of outputs, so the arrival of the request no longer races the count.
 - S88: A flood of 45 seconds on the published 0.0.5 holds the sidecar at 49 MB and the application at 137 MB, against about 3 GB before the bound.
