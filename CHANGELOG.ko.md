@@ -1,5 +1,6 @@
 # Changelog
 
+- S87: S73부터 S86까지 담은 version 0.0.5.
 - S73: program의 출력이 더는 service를 키우지 않는다. output channel이 차면 읽기를 멈추며, Red와 Green은 하위 항목에 있다.
 - S79: OSC 7은 `kitty-shell-cwd://`처럼 다른 scheme의 URI를 명시적 오류로 거부한다. 터미널 프로토콜 명세대로 `file` URI만 받아들인다.
 - S78: 닫히지 않은 synchronized update(DEC 2026)는 여는 sequence 뒤 150 ms인 기한에 끝난다. frame clock이 `stop_sync`를 호출해 잡힌 출력을 그리며, 타이머는 update가 잡혀 있는 동안에만 존재한다.
