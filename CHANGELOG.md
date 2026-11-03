@@ -1,5 +1,6 @@
 # Changelog
 
+- S77: Inline images keep moving with output at the history limit: the scroll generation counts the rows that the limit dropped, and the rows of every input are counted in slices of 999 bytes, so a flood recycles the cached rows without an allocation per row.
 - S76: A malformed color of OSC 4 and a malformed target, data or encoding of OSC 52 produce `sequence.rejected` with a fixed reason that does not hold the payload, instead of only a debug line.
 - S75: One `vte::Parser` finds the sequences before the terminal, so an OSC ended by CAN, SUB or ESC no longer holds later output or marks, an erase with a control byte inside it erases in place, an unknown CSI, DCS or ESC produces `sequence.rejected` without its payload, and a sequence over 1402200 bytes is rejected.
 - S84: An inline image scrolled partly past the top edge stays visible until its last row leaves the frame: the top of an image is signed, and the store keeps the height at which the frame draws it.

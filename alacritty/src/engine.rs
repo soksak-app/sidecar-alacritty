@@ -798,6 +798,15 @@ pub struct AlacrittyEngine {
     special_enabled: [bool; 5],
 }
 
+/// The rows above the history limit that the engine counts at one time. The library frees the rows
+/// above its cache of 1000 rows when the limit returns (`Storage::shrink_lines`), so the count stays
+/// inside that cache and a flood recycles rows instead of allocating them.
+const COUNTED_ROWS: usize = 1000;
+
+/// The input between two counts. One byte of a line feed pushes one row, so ordinary output stays
+/// below `COUNTED_ROWS`, and reaching that number means that rows may have gone uncounted.
+const ADVANCE_SLICE_BYTES: usize = COUNTED_ROWS - 1;
+
 impl Default for AlacrittyEngine {
     fn default() -> Self {
         Self::new()
@@ -1190,21 +1199,19 @@ impl AlacrittyEngine {
         self.dropped + self.term.grid().history_size() as i64 + i64::from(line)
     }
 
-    /// Feeds input into the engine. In the prompt state, the history limit is raised temporarily so
-    /// that every row this input pushes up is kept in history. Then the rows past the limit are
-    /// dropped and counted. This keeps the absolute number of the first prompt row correct after
-    /// scrolling. One byte cannot push up more rows than the screen has.
+    /// Feeds input into the engine. The history limit is raised temporarily so that every row a
+    /// slice of this input pushes up is kept in history. Then the rows past the limit are dropped
+    /// and counted. Without this, the library drops the rows at the limit silently, and the absolute
+    /// numbers of the screen rows and the scroll generation of inline images stop moving. One byte
+    /// cannot push up more rows than the screen has.
     fn advance(&mut self, bytes: &[u8]) {
-        if self.prompt_start.is_none() {
-            self.processor.advance(&mut self.term, bytes);
-            return;
+        for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
+            self.term
+                .grid_mut()
+                .update_history(self.history_limit + COUNTED_ROWS);
+            self.processor.advance(&mut self.term, slice);
+            self.count_pushed_rows();
         }
-        let rows = self.term.grid().screen_lines();
-        self.term
-            .grid_mut()
-            .update_history(self.history_limit + bytes.len() * rows);
-        self.processor.advance(&mut self.term, bytes);
-        self.limit_history();
     }
 
     /// Reduces the history to the limit and counts the dropped rows. Changes the grid size. The
@@ -1245,6 +1252,17 @@ impl AlacrittyEngine {
             .rev()
             .take_while(|row| grid[Line(*row)].is_clear())
             .count()
+    }
+
+    /// Counts the rows that the input pushed above the limit, and reports when more rows than the
+    /// count covers may have passed, because the library drops those without a record.
+    fn count_pushed_rows(&mut self) {
+        if self.term.grid().history_size() >= self.history_limit + COUNTED_ROWS {
+            self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
+                "one input pushed {COUNTED_ROWS} or more rows above the history limit, so the row count may be low"
+            ))));
+        }
+        self.limit_history();
     }
 
     fn limit_history(&mut self) {
@@ -2070,8 +2088,11 @@ impl Engine for AlacrittyEngine {
         }
     }
 
+    /// Count of rows that have scrolled into the history, including the rows dropped past the
+    /// history limit. It increases with each row pushed up and does not change when the history
+    /// reaches its limit.
     fn scroll_generation(&self) -> i64 {
-        self.term.grid().history_size() as i64
+        self.dropped + self.term.grid().history_size() as i64
     }
 
     fn modes(&self) -> Modes {
