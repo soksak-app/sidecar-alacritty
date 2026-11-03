@@ -1,5 +1,6 @@
 # Changelog
 
+- S74: Closing a session ends the jobs of its shell; the behavior landed with S73-5, and its three tests pass.
 - S85: The job test waits for the report of its job instead of a timer, and the exit test waits for the refusal of a signal without a time budget.
 - S73-6: The surface consumes one chunk of output per turn, so an input request ends during a flood of output.
 - S73-5: Close follows the table of the specification: queued input completes with `session closed`, a close that is requested decides the reason when the reaper reports the child, and close sends SIGHUP to the child before the SIGKILL of its group and child.
