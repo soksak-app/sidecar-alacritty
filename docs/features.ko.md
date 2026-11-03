@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S89 — P1: 입력 요청의 flood test에는 출력 수 상한이 없다. 입력: flood가 출력 1000개를 보낸 뒤 입력 요청이 도착한다. 동작: surface가 입력을 끝냈는데도 그 수가 요청 도착과 경쟁해 `an_input_request_ends_during_a_flood_of_output`가 한 CI run에서 `the input ended after the flood consumed all 1000 outputs`로 실패했다. 기대: flood는 입력이 끝날 때까지 돌고, 차례를 끝내지 않는 surface는 write 대기에서 실패한다. Red: 출력 1000개 뒤에 요청을 보내고 이전 상한을 두면 test가 그 assertion으로 실패했다. Green: 상한이 없으면 통과한다. 한 차례에 대기 중인 출력을 모두 소비하는 loop를 넣으면 같은 test가 60 s 제한에서 실패한다.
 - [o] S88 — P0: 공개된 release에서 flood의 footprint를 잰다. 입력: core 0.0.33, plugin term, 이 sidecar 0.0.5의 108열 17행 터미널에서 `yes`를 45초 실행했고, load average는 35에서 50이었다. 결과: sidecar footprint는 49 MB, host와 sidecar와 page의 합은 137 MB에 머물렀고, 한도를 두기 전에는 약 3 GB였다. Ctrl+C 뒤의 줄은 0.66 초 뒤에 나타났고 오류는 기록되지 않았다.
 - [o] S87 — P0: S73부터 S86까지 담은 alacritty sidecar release를 publish하고 registry에 올린 뒤 term plugin이 요구하게 한다. 결과: release run이 v0.0.5를 공개했고, registry가 그것을 올렸으며, term 0.0.5와 0.0.6이 그것을 요구한다.
 - [o] S73 — P0: 프로그램이 엔진의 소비보다 빨리 쓰는 출력은 service를 키우지 않는다. 입력: 터미널에서 약 20초 동안 `yes`. 동작: reader가 각 read를 무제한 channel로 보내 service가 약 3 GB에 이르렀다. 기대: `docs/spec/alacritty-core.md`의 PTY 출력과 입력 절의 계약. Red와 Green: 하위 항목.

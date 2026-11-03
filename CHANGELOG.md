@@ -1,5 +1,6 @@
 # Changelog
 
+- S89: The flood test of an input request has no bound of outputs, so the arrival of the request no longer races the count.
 - S88: A flood of 45 seconds on the published 0.0.5 holds the sidecar at 49 MB and the application at 137 MB, against about 3 GB before the bound.
 - S87: Version 0.0.5, which carries S73 to S86.
 - S73: The output of a program no longer grows the service: reads stop at a full output channel, and the children of this item hold the Red and Green.

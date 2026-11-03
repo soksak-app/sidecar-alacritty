@@ -41,9 +41,8 @@ struct TraceEngine {
 
 type Refill = Arc<std::sync::Mutex<Option<Flood>>>;
 
-// The outputs that a flood sends before it stops. The limit ends the flood of a surface that never
-// ends its turn, so the test fails by its assertion instead of stalling.
-const FLOOD_LIMIT: usize = 1000;
+// The outputs that a flood sends before the input request of the test.
+const OUTPUTS_BEFORE_INPUT: usize = 1000;
 
 struct Flood {
     outputs: mpsc::Sender<soksak_sidecar_alacritty_core::protocol::DaemonEvent>,
@@ -68,9 +67,7 @@ impl Engine for TraceEngine {
         Ok(())
     }
     fn feed(&mut self, bytes: &[u8]) {
-        if let Some(flood) = self.refill.lock().unwrap().as_mut()
-            && flood.sent < FLOOD_LIMIT
-        {
+        if let Some(flood) = self.refill.lock().unwrap().as_mut() {
             flood.sent += 1;
             // A full channel already holds the next output.
             let _ = flood.outputs.try_send(daemon_output(b"x"));
@@ -1897,7 +1894,8 @@ async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
     );
 }
 
-// The surface consumes one output per turn, so an input request ends while output keeps arriving.
+// The surface consumes one output per turn, so an input request ends while output keeps arriving. The
+// flood has no end of its own: a surface that never ends its turn fails at the wait for the write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_input_request_ends_during_a_flood_of_output() {
     let surface = serve_leased().await;
@@ -1906,6 +1904,13 @@ async fn an_input_request_ends_during_a_flood_of_output() {
         sent: 0,
     });
     surface.outputs.send(daemon_output(b"x")).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while surface.refill.lock().unwrap().as_ref().unwrap().sent < OUTPUTS_BEFORE_INPUT {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the flood did not reach the outputs before the input");
     surface
         .requests
         .send(
@@ -1916,10 +1921,5 @@ async fn an_input_request_ends_during_a_flood_of_output() {
         .await
         .unwrap();
     wait_events(&surface.events, "sidecar.alacritty.pty_write", 1, |_| true).await;
-    let flood = surface.refill.lock().unwrap().take().unwrap();
-    assert!(
-        flood.sent < FLOOD_LIMIT,
-        "the input ended after the flood consumed all {} outputs",
-        flood.sent
-    );
+    surface.refill.lock().unwrap().take();
 }
