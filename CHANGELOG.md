@@ -1,5 +1,6 @@
 # Changelog
 
+- S81: An inline image is decoded with ImageIO when it is stored: an image that does not decode is rejected with `sequence.rejected` and no image, and the frame draws without it, instead of failing the whole frame with `Frame draw failed`.
 - S80: A request line has the 64 MiB message limit: a line over it is refused with `message exceeds 67108864 bytes` and ends the input of its connection, because the line reader stops after a decoder error.
 - S86: A reconnect reports the input that the session holds, because the session reports it only when the state changes.
 - S74: Closing a session ends the jobs of its shell; the behavior landed with S73-5, and its three tests pass.
