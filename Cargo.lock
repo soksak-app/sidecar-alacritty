@@ -829,6 +829,7 @@ name = "soksak-sidecar-alacritty"
 version = "0.0.4"
 dependencies = [
  "alacritty_terminal",
+ "base64 0.22.1",
  "compact_str",
  "libc",
  "pkg-config",

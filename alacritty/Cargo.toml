@@ -20,6 +20,7 @@ diagnostics = ["soksak-sidecar-alacritty-core/diagnostics"]
 
 [dependencies]
 alacritty_terminal = "0.26"
+base64 = "0.22"
 serde_json = "1"
 soksak-sidecar-alacritty-core = { path = "../alacritty-core" }
 compact_str = "0.9"
