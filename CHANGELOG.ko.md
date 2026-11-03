@@ -1,5 +1,6 @@
 # Changelog
 
+- S88: 공개된 0.0.5에서 45초 flood의 sidecar는 49 MB, application은 137 MB에 머문다. 한도를 두기 전에는 약 3 GB였다.
 - S87: S73부터 S86까지 담은 version 0.0.5.
 - S73: program의 출력이 더는 service를 키우지 않는다. output channel이 차면 읽기를 멈추며, Red와 Green은 하위 항목에 있다.
 - S79: OSC 7은 `kitty-shell-cwd://`처럼 다른 scheme의 URI를 명시적 오류로 거부한다. 터미널 프로토콜 명세대로 `file` URI만 받아들인다.

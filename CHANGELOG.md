@@ -1,5 +1,6 @@
 # Changelog
 
+- S88: A flood of 45 seconds on the published 0.0.5 holds the sidecar at 49 MB and the application at 137 MB, against about 3 GB before the bound.
 - S87: Version 0.0.5, which carries S73 to S86.
 - S73: The output of a program no longer grows the service: reads stop at a full output channel, and the children of this item hold the Red and Green.
 - S79: OSC 7 rejects a URI of another scheme, such as `kitty-shell-cwd://`, with an explicit error: only `file` URIs are accepted, as the terminal protocol spec states.
