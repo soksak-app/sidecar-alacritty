@@ -2,6 +2,7 @@
 
 [한국어](features.ko.md)
 
+- [o] S21 — P0: The cost of a frame after S19 is measured on the published 0.0.4 with the plugin term 0.0.4, with the window and the output of the measurement of 0.0.3, under a load average of 14 to 21 against 9 to 12 then. Result: a status line took 1.5 ms per frame at 27.7 frames per second and now takes 1.6 ms at 27.6, which is the same within the measurement. 20 rows rewritten every 33 ms took 11.2% of application CPU at 27.4 frames per second, 4.1 ms per frame, and now take 8.4% at 27.5, 3.1 ms per frame.
 - [o] S20 — P0: Publish a release that carries S19 and list it in the registry. Result: the release run published v0.0.4, the registry lists it, and term 0.0.4 requires it.
 - [o] S19 — P0: Output that the frame clock holds builds no screen. Input: a program writes 20 chunks of output without input. Behavior: each chunk built a screen, which copies the whole grid, before the frame clock decided whether to draw it. Expected: the surface builds one screen for each frame that it draws. Red: `the_frame_clock_builds_no_screen_for_output_that_it_holds` failed with `20 chunks of output built 21 screens for 1 frames`. Green: the test and the serve tests pass.
 - [o] S1 — P1: A terminal sidecar that redraws only the strips of changed rows, presents its frames in the lease mode of core (F386) and sends screens only on request, beside the VT sidecar that stays the copy-mode baseline. Expected: the children below. S1-1 to S1-9 and S1-11 to S1-18 are complete, and S1-10 is closed.

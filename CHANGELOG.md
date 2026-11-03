@@ -1,5 +1,6 @@
 # Changelog
 
+- S21: The cost of a frame on 0.0.4 is measured: a status line 1.6 ms per frame and 20 rows 3.1 ms per frame.
 - S20: Version 0.0.4, which carries S19.
 - S19: Output that the frame clock holds builds no screen.
 - S1-5: The comparison with the VT sidecar is measured: a frame of a status line takes 1.5 ms of application CPU against 12.4 ms, and a frame of 20 rewritten rows takes 4.1 ms against 14.6 ms.

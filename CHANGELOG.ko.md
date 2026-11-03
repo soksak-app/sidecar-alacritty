@@ -1,5 +1,6 @@
 # Changelog
 
+- S21: 0.0.4의 frame 비용을 쟀다. status line은 frame당 1.6 ms, 20행은 frame당 3.1 ms다.
 - S20: S19를 담은 version 0.0.4.
 - S19: frame 시계가 잡아 둔 출력은 화면을 만들지 않는다.
 - S1-5: VT sidecar와의 비교를 쟀다. 상태 줄 frame은 앱 CPU 1.5 ms 대 12.4 ms, 20행을 다시 쓰는 frame은 4.1 ms 대 14.6 ms다.

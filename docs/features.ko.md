@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [o] S21 — P0: S19 뒤의 frame 비용을 공개된 0.0.4와 plugin term 0.0.4에서 0.0.3 측정과 같은 창과 출력으로 쟀다. load average는 당시 9~12, 이번 14~21이다. 결과: status line은 27.7 frame/s에서 frame당 1.5 ms였고 지금은 27.6 frame/s에서 1.6 ms로 측정 범위 안에서 같다. 33 ms마다 20행을 다시 쓰는 출력은 27.4 frame/s에서 앱 CPU 11.2%, frame당 4.1 ms였고, 지금은 27.5 frame/s에서 8.4%, frame당 3.1 ms다.
 - [o] S20 — P0: S19를 담은 release를 공개하고 registry에 올린다. 결과: release run이 v0.0.4를 공개했고, registry가 그것을 올렸으며, term 0.0.4가 그것을 요구한다.
 - [o] S19 — P0: frame 시계가 잡아 둔 출력은 화면을 만들지 않는다. 입력: program이 입력 없이 출력 20조각을 쓴다. 동작: frame 시계가 그릴지 정하기 전에 조각마다 grid 전체를 복사하는 화면을 만들었다. 기대: surface는 그리는 frame마다 화면을 하나 만든다. Red: `the_frame_clock_builds_no_screen_for_output_that_it_holds`가 `20 chunks of output built 21 screens for 1 frames`로 실패했다. Green: 이 test와 serve test가 통과한다.
 - [o] S1 — P1: 바뀐 행의 strip만 다시 그리고, core lease 방식(F386)으로 frame을 보이며, 요청할 때만 screen을 보내는 터미널 sidecar. copy 방식 기준선인 VT sidecar와 나란히 둔다. 기대: 아래 하위 항목. S1-1부터 S1-9까지, S1-11부터 S1-18까지 완료했고, S1-10은 닫았다.
