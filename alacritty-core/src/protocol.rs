@@ -4679,20 +4679,18 @@ async fn surface_task(
                                 record_mouse_modes(&log, &surface_id, &mut recorded_mouse_modes, &engine.modes());
                                 if !send_engine_events(SurfacePorts { surface_id: &surface_id, session_port: &session_port, output_tx: &output_tx, log: &log, inputs: &mut inputs }, session_id.as_deref(), &mut engine, !headless, &mut image_state, &mut multipart).await { return; }
                                 if headless || hold_while_presenting(&mut image_state) { continue; }
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
-
                                 if let Some(ref mut img_state) = image_state {
-                                        // If the image is on the host, it is not drawn until it
-                                        // comes back, and only the fact of the change is recorded.
-                                        if img_state.pending_draw {
-                                            img_state.dirty = true;
-                                        } else if let Some(due) = frame_due(img_state, last_input) {
-                                            img_state.dirty = true;
-                                            frame_clock.get_or_insert(due);
-                                        } else if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, inputs.sequence).await {
-                                            return;
-                                        }
-                                    continue;
+                                    // The frame clock decides first, because a screen copies the
+                                    // whole grid and output that it holds builds none.
+                                    if let Some(due) = frame_due(img_state, last_input) {
+                                        img_state.dirty = true;
+                                        frame_clock.get_or_insert(due);
+                                        continue;
+                                    }
+                                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                    if !present_screen(&surface_id, screen, img_state, &output_tx, "image", &log, inputs.sequence).await {
+                                        return;
+                                    }
                                 }
                             }
                     }
