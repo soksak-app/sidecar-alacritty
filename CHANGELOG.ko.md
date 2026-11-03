@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-5: VT sidecar와의 비교를 쟀다. 상태 줄 frame은 앱 CPU 1.5 ms 대 12.4 ms, 20행을 다시 쓰는 frame은 4.1 ms 대 14.6 ms다.
 - S1-17: sidecar를 0.0.3으로 release했다.
 - S1-18: sidecar는 records kit 0.0.6을 쓴다.
 - S1-16: service의 시작 기록과 stall dump는 sidecar를 `alacritty`로 적는다.

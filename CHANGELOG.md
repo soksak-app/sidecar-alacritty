@@ -1,5 +1,6 @@
 # Changelog
 
+- S1-5: The comparison with the VT sidecar is measured: a frame of a status line takes 1.5 ms of application CPU against 12.4 ms, and a frame of 20 rewritten rows takes 4.1 ms against 14.6 ms.
 - S1-17: The sidecar is released as 0.0.3.
 - S1-18: The sidecar uses the records kit 0.0.6.
 - S1-16: The start record and the stall dump of the service name the sidecar `alacritty`.
