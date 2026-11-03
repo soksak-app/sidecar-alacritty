@@ -1,5 +1,6 @@
 # Changelog
 
+- S85: The job test waits for the report of its job instead of a timer, and the exit test waits for the refusal of a signal without a time budget.
 - S73-6: The surface consumes one chunk of output per turn, so an input request ends during a flood of output.
 - S73-5: Close follows the table of the specification: queued input completes with `session closed`, a close that is requested decides the reason when the reaper reports the child, and close sends SIGHUP to the child before the SIGKILL of its group and child.
 - S73-4: The end of a child sends its last output before `Exit`, fails queued input with `child exited`, closes the masters, and the surface draws the screen that the frame clock holds before it ends.

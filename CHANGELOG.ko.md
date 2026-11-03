@@ -1,5 +1,6 @@
 # Changelog
 
+- S85: job test는 timer 대신 job의 보고를 기다리고, exit test는 time budget 없이 signal의 거부를 기다린다.
 - S73-6: surface는 turn마다 출력 chunk 하나를 소비하므로, 출력 flood 중에도 input 요청이 끝난다.
 - S73-5: close는 명세의 표를 따른다. queue의 입력은 `session closed`로 끝나고, close가 요청되었으면 reaper의 보고와 겹쳐도 close가 이유를 정하며, close는 group과 child에 SIGKILL을 보내기 전에 child에 SIGHUP을 보낸다.
 - S73-4: child 종료는 마지막 출력을 `Exit` 앞에 보내고, queue의 입력을 `child exited`로 실패시키며, master를 닫고, surface는 frame clock이 쥔 화면을 그린 뒤 끝난다.
