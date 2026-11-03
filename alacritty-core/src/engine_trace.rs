@@ -1,6 +1,6 @@
 //! Records engine input in diagnostic builds. When the trace folder is set (the entry point reads
 //! `SOKSAK_ALACRITTY_TRACE_DIR` once and passes it to the writer), each surface writes one line per engine
-//! input, in order, to `<dir>/<surface>.trace`: `resize <cols> <rows>`, `reset`, `feed <base64>`.
+//! input, in order, to `<dir>/<surface>.trace`: `resize <cols> <rows>` and `feed <base64>`.
 //! The records become fixtures of the engine replay test. Normal builds contain no recording code.
 
 /// Records one engine input line of a surface. A failed write is recorded as an error event.

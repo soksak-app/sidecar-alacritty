@@ -1,5 +1,6 @@
 # Changelog
 
+- S73-1: The session holds no ring and no attach path, so output that the consumer read leaves no copy; a connection that is not persistent closes its sessions when it ends.
 - S21: The cost of a frame on 0.0.4 is measured: a status line 1.6 ms per frame and 20 rows 3.1 ms per frame.
 - S20: Version 0.0.4, which carries S19.
 - S19: Output that the frame clock holds builds no screen.
