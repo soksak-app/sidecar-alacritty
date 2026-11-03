@@ -1,5 +1,6 @@
 # Changelog
 
+- S79: OSC 7 rejects a URI of another scheme, such as `kitty-shell-cwd://`, with an explicit error: only `file` URIs are accepted, as the terminal protocol spec states.
 - S78: A synchronized update (DEC 2026) that is never closed ends at its deadline, 150 ms after its opening sequence: the frame clock calls `stop_sync`, the held output is drawn, and the timer exists only while an update is held.
 - S77: Inline images keep moving with output at the history limit: the scroll generation counts the rows that the limit dropped, and the rows of every input are counted in slices of 999 bytes, so a flood recycles the cached rows without an allocation per row.
 - S76: A malformed color of OSC 4 and a malformed target, data or encoding of OSC 52 produce `sequence.rejected` with a fixed reason that does not hold the payload, instead of only a debug line.

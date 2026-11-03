@@ -2439,3 +2439,21 @@ fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
     );
     assert!(engine.sync_deadline().is_none());
 }
+
+#[test]
+fn an_osc_7_with_another_scheme_is_an_explicit_error() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]7;kitty-shell-cwd:///tmp/a\x07");
+    let errors: Vec<_> = engine
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            EngineEvent::Error(reason) => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        errors,
+        ["OSC 7 directory URI is not a file URI: \"kitty-shell-cwd:///tmp/a\""]
+    );
+}
