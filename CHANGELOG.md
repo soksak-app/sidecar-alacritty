@@ -1,5 +1,6 @@
 # Changelog
 
+- S86: A reconnect reports the input that the session holds, because the session reports it only when the state changes.
 - S74: Closing a session ends the jobs of its shell; the behavior landed with S73-5, and its three tests pass.
 - S85: The job test waits for the report of its job instead of a timer, and the exit test waits for the refusal of a signal without a time budget.
 - S73-6: The surface consumes one chunk of output per turn, so an input request ends during a flood of output.

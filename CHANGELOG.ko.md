@@ -1,5 +1,6 @@
 # Changelog
 
+- S86: session은 상태가 바뀔 때만 잡은 입력을 보고하므로, 재연결이 이를 보고한다.
 - S74: 세션을 닫으면 그 shell의 job이 끝난다. 동작은 S73-5에서 들어갔고, 세 test가 통과한다.
 - S85: job test는 timer 대신 job의 보고를 기다리고, exit test는 time budget 없이 signal의 거부를 기다린다.
 - S73-6: surface는 turn마다 출력 chunk 하나를 소비하므로, 출력 flood 중에도 input 요청이 끝난다.
