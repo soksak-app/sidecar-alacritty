@@ -1,5 +1,6 @@
 # Changelog
 
+- S82: The default of a lost write result states its reason, so the sources pass the census of `make test`.
 - S73-2: One I/O task reads and writes a session: reads stop at 16 chunks of 64 KiB, a write never waits in the surface task, and the surface acknowledges a write from its result.
 - S73-1: The session holds no ring and no attach path, so output that the consumer read leaves no copy; a connection that is not persistent closes its sessions when it ends.
 - S21: The cost of a frame on 0.0.4 is measured: a status line 1.6 ms per frame and 20 rows 3.1 ms per frame.
