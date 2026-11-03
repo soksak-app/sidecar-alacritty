@@ -1,5 +1,6 @@
 # Changelog
 
+- S73-4: The end of a child sends its last output before `Exit`, fails queued input with `child exited`, closes the masters, and the surface draws the screen that the frame clock holds before it ends.
 - S73-3-1: The bound of queued input is checked under the queue lock, so a concurrent write is never refused for bytes that another write takes back; a test session sets its bound with `PtyService::with_input_bound`.
 - S73-3: Queued input has a bound of 64 MiB: input of a person over it is refused with an explicit error, and a reply of the engine stops reads and reports `input_held`.
 - S82: The default of a lost write result states its reason, so the sources pass the census of `make test`.

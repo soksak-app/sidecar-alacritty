@@ -3593,8 +3593,24 @@ async fn surface_task(
     let mut frame_clock: Option<Instant> = None;
     // The time of the last input or paste, which starts the input window.
     let mut last_input: Option<Instant> = None;
+    // The session ended, and the surface ends when the screen that the frame clock holds is drawn.
+    let mut session_ended = false;
 
     loop {
+        if session_ended
+            && image_state
+                .as_ref()
+                .is_none_or(|state| !state.dirty || !state.drawing)
+        {
+            if output_tx
+                .send(json!({"surface": surface_id, "body": {"event": "exit"}}).to_string())
+                .await
+                .is_err()
+            {
+                // The output channel has closed, so this exits as it is
+            }
+            break;
+        }
         tokio::select! {
             Some(result) = inputs.next_write_result(), if !inputs.pending_writes.is_empty() => {
                 if !inputs.finish_front_write(result).await { return; }
@@ -4103,8 +4119,7 @@ async fn surface_task(
                         }
                         if exited {
                             if !inputs.finish_all_writes().await { return; }
-                            if output_tx.send(json!({"surface": surface_id, "body": {"event": "exit"}}).to_string()).await.is_err() { return; }
-                            return;
+                            session_ended = true;
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
@@ -4816,14 +4831,14 @@ async fn surface_task(
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
                                 if !inputs.finish_all_writes().await { return; }
-                                let response = json!({
-                                    "surface": surface_id,
-                                    "body": {"event": "exit"}
-                                });
-                                if output_tx.send(response.to_string()).await.is_err() {
-                                    // The output channel has closed, so this exits as it is
-                                }
-                                break;
+                                session_ended = true;
+                                if let Some(state) = image_state.as_mut()
+                                    && state.dirty && !state.pending_draw && state.drawing {
+                                        let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                        if !present_screen(&surface_id, screen, state, &output_tx, "exit", &log, inputs.sequence).await {
+                                            return;
+                                        }
+                                    }
                             }
                     }
                     DaemonEvent::InputHeld { session_id: ref recv_sid, queued, held } => {

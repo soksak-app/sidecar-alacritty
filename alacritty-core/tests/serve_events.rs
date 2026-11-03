@@ -189,7 +189,7 @@ async fn serve_with(
     // An input is complete when its acknowledgement states that the master accepted its bytes, and
     // the end of the connection closes the session, which refuses what is still queued.
     while input
-        .windows(16)
+        .windows(b"\"operation\":\"input".len())
         .any(|part| part == b"\"operation\":\"input")
         && !replies
             .iter()
@@ -1706,6 +1706,37 @@ impl LeasedSurface {
         })
         .await;
     }
+}
+
+// The end of a session draws the output that the frame clock holds, so the last output of a program
+// is on the screen.
+#[tokio::test(start_paused = true)]
+async fn the_end_of_a_session_draws_the_output_that_the_frame_clock_holds() {
+    let surface = serve_leased().await;
+    surface.output(1).await;
+    let before = surface.events.named("sidecar.alacritty.pty_read").len();
+    surface.outputs.send(daemon_output(b"x")).await.unwrap();
+    surface
+        .outputs
+        .send(soksak_sidecar_alacritty_core::protocol::DaemonEvent::Exit {
+            session_id: "scripted-session".to_string(),
+        })
+        .await
+        .unwrap();
+    let read = wait_events(
+        &surface.events,
+        "sidecar.alacritty.pty_read",
+        before + 1,
+        |_| true,
+    )
+    .await;
+    let last = read[before]["fields"]["sequence"].as_u64().unwrap();
+    wait_events(&surface.events, "sidecar.alacritty.frame", 1, |frame| {
+        frame["fields"]["sequence"]
+            .as_u64()
+            .is_some_and(|sequence| sequence >= last)
+    })
+    .await;
 }
 
 // The frame clock draws output on one clock of 33 ms: no two frames of output without input are
