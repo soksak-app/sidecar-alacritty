@@ -42,6 +42,7 @@ async fn a_shell_without_locale_variables_runs_in_a_utf8_locale() {
                 DaemonEvent::Output { data, .. } => output.extend_from_slice(&data),
                 DaemonEvent::Exit { .. } => break,
                 DaemonEvent::Error { error, .. } => panic!("the PTY session failed: {error}"),
+                DaemonEvent::InputHeld { .. } => panic!("no input was queued"),
             }
         }
     })

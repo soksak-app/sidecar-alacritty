@@ -143,6 +143,7 @@ impl SessionPort for TracePort {
     async fn write(
         &self,
         _session_id: &str,
+        _origin: soksak_sidecar_alacritty_core::pty::WriteOrigin,
         _data: std::sync::Arc<[u8]>,
     ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
         Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
@@ -538,6 +539,7 @@ impl SessionPort for OutputPort {
     async fn write(
         &self,
         _session_id: &str,
+        _origin: soksak_sidecar_alacritty_core::pty::WriteOrigin,
         _data: std::sync::Arc<[u8]>,
     ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
         Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
@@ -1018,6 +1020,7 @@ impl SessionPort for FailingOpenPort {
     async fn write(
         &self,
         _session_id: &str,
+        _origin: soksak_sidecar_alacritty_core::pty::WriteOrigin,
         _data: std::sync::Arc<[u8]>,
     ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
         Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
@@ -1493,6 +1496,7 @@ impl SessionPort for HeldOpenPort {
     async fn write(
         &self,
         _session_id: &str,
+        _origin: soksak_sidecar_alacritty_core::pty::WriteOrigin,
         _data: std::sync::Arc<[u8]>,
     ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
         Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))

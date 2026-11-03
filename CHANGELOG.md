@@ -1,5 +1,6 @@
 # Changelog
 
+- S73-3: Queued input has a bound of 64 MiB: input of a person over it is refused with an explicit error, and a reply of the engine stops reads and reports `input_held`.
 - S82: The default of a lost write result states its reason, so the sources pass the census of `make test`.
 - S73-2: One I/O task reads and writes a session: reads stop at 16 chunks of 64 KiB, a write never waits in the surface task, and the surface acknowledges a write from its result.
 - S73-1: The session holds no ring and no attach path, so output that the consumer read leaves no copy; a connection that is not persistent closes its sessions when it ends.

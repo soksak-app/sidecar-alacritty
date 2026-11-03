@@ -129,7 +129,13 @@ async fn a_write_returns_while_the_program_does_not_read() {
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     let writing = service.clone();
     let id = session_id.clone();
-    let write = tokio::task::spawn_blocking(move || writing.write(&id, b"line\n".repeat(800_000)));
+    let write = tokio::task::spawn_blocking(move || {
+        writing.write(
+            &id,
+            crate::pty::WriteOrigin::Person,
+            b"line\n".repeat(800_000),
+        )
+    });
     let waited = timeout(Duration::from_secs(10), write).await;
     let closed = service.close(&session_id);
     waited
@@ -148,14 +154,138 @@ async fn writes_to_a_program_that_echoes_end_in_order_while_the_output_is_read()
         .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     let first = service
-        .write(&session_id, b"first\n".repeat(400_000))
+        .write(
+            &session_id,
+            crate::pty::WriteOrigin::Person,
+            b"first\n".repeat(400_000),
+        )
         .unwrap();
-    let second = service.write(&session_id, &b"second\n"[..]).unwrap();
+    let second = service
+        .write(
+            &session_id,
+            crate::pty::WriteOrigin::Person,
+            &b"second\n"[..],
+        )
+        .unwrap();
     let consumer = tokio::spawn(async move { while rx.recv().await.is_some() {} });
     first.await.unwrap().unwrap();
     second.await.unwrap().unwrap();
     service.close(&session_id).unwrap();
     consumer.await.unwrap();
+}
+
+/// The bytes of queued input that a session holds at most (`QUEUED_INPUT_BYTES`).
+const INPUT_BOUND: usize = 64 * 1024 * 1024;
+
+/// `count` lines of five bytes. A program that does not read holds complete lines in the canonical
+/// queue of its line discipline, so the master write blocks behind them.
+fn lines(count: usize) -> Vec<u8> {
+    b"line\n".repeat(count)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_of_a_person_over_the_bound_is_refused_with_an_explicit_error() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, _rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    service
+        .write(&session_id, WriteOrigin::Person, lines(INPUT_BOUND / 5))
+        .expect("input within the bound is queued");
+    let refused = service.write(&session_id, WriteOrigin::Person, lines(1024 * 1024 / 5));
+    let closed = service.close(&session_id);
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|error| error.contains("input queue")),
+        "input over the bound was not refused: {:?}",
+        refused.map(|_| ())
+    );
+    closed.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_of_the_engine_over_the_bound_stops_reads_and_reports_it() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &[
+                "-c".into(),
+                "stty raw -echo; printf READY; sleep 1; cat > /dev/null".into(),
+            ],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let mut seen = Vec::new();
+    while !seen.ends_with(b"READY") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    let reply = service
+        .write(&session_id, WriteOrigin::Engine, lines(INPUT_BOUND / 5 + 1))
+        .expect("a reply of the engine is never refused");
+    let mut held = Vec::new();
+    while held.len() < 2 {
+        match next_event(&mut rx).await {
+            DaemonEvent::InputHeld {
+                queued,
+                held: state,
+                ..
+            } => held.push((state, queued)),
+            DaemonEvent::Output { .. } => {}
+            event => panic!("the session ended before it reported the held input: {event:?}"),
+        }
+    }
+    assert!(held[0].0 && held[0].1 > INPUT_BOUND, "{held:?}");
+    assert!(!held[1].0 && held[1].1 <= INPUT_BOUND, "{held:?}");
+    reply.await.unwrap().unwrap();
+    service.close(&session_id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_interrupt_reaches_a_program_only_after_the_input_before_it() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, _rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let queued = service
+        .write(&session_id, WriteOrigin::Person, lines(1024 * 1024 / 5))
+        .unwrap();
+    let mut interrupt = service
+        .write(&session_id, WriteOrigin::Person, &b"\x03"[..])
+        .unwrap();
+    // The first write waits for a program that does not read, so the interrupt behind it waits.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let waiting = matches!(
+        interrupt.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    );
+    service.close(&session_id).unwrap();
+    assert!(waiting, "the interrupt passed the input before it");
+    drop(queued);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -180,6 +310,7 @@ async fn output_that_the_consumer_reads_is_not_dropped() {
             DaemonEvent::Output { data, .. } => read += data.len(),
             DaemonEvent::Exit { .. } => break,
             DaemonEvent::Error { error, .. } => panic!("the session reported {error}"),
+            DaemonEvent::InputHeld { .. } => panic!("no input was queued"),
         }
     }
     assert_eq!(read, 100_000_000);
@@ -200,7 +331,9 @@ async fn output_after_the_consumer_ended_is_counted_as_a_dropped_buffer() {
         .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
         .expect("PTY setup failed; environmental PTY errors must fail this test");
     drop(rx);
-    service.write(&session_id, &b"gone\n"[..]).unwrap();
+    service
+        .write(&session_id, crate::pty::WriteOrigin::Person, &b"gone\n"[..])
+        .unwrap();
     // The reader thread stores the event when it sends the echo to the receiver that is gone. No
     // notification reaches this test from that thread, so it asks the file again after a short pause.
     let dropped = timeout(STALL, async {
@@ -387,6 +520,7 @@ fn observed_session(
         master: Mutex::new(None),
         process_group: with_group.then_some(group),
         input: Mutex::new(None),
+        queued_input: AtomicUsize::new(0),
         child: Mutex::new(SessionChild {
             child: Box::new(ObservedChild {
                 inner,

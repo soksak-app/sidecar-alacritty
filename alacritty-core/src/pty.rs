@@ -14,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -59,6 +60,10 @@ const OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
 /// The chunks of output that the engine has not consumed which a session holds. A full channel
 /// stops reads and nothing else, so the program waits in its own write and no output is dropped.
 const OUTPUT_CHUNKS: usize = 16;
+/// The bytes of queued input that a session holds before its reads stop. Input of a person that
+/// would exceed it is refused. The bound passes a paste far larger than a person pastes and bounds
+/// what a stuck session holds.
+const QUEUED_INPUT_BYTES: usize = 64 * 1024 * 1024;
 
 /// The channel through which a session delivers its output and its end to the one surface that
 /// consumes it.
@@ -76,6 +81,15 @@ pub fn write_completed(result: Result<(), String>) -> WriteCompletion {
     // default: the receiver is held right here, so this send cannot fail.
     let _ = sender.send(result);
     completion
+}
+
+/// Who caused a write. A person can stop and retry, so input of a person is refused at the bound of
+/// the queue. A reply of the engine is never refused, because a refused reply leaves the program
+/// waiting; the session stops reading output instead, so the program produces no more replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteOrigin {
+    Person,
+    Engine,
 }
 
 /// One write in the queue of a session.
@@ -113,6 +127,8 @@ struct Session {
     process_group: Option<i32>,
     /// The queue of writes that the I/O task consumes. None once the writer is closed.
     input: Mutex<Option<mpsc::UnboundedSender<QueuedWrite>>>,
+    /// The bytes of the queue that the master has not accepted yet.
+    queued_input: AtomicUsize,
     child: Mutex<SessionChild>,
     /// The reaper thread notifies after it records reaped of the child.
     child_reaped: Condvar,
@@ -323,6 +339,7 @@ impl PtyService {
             master: Mutex::new(Some(pair.master)),
             process_group,
             input: Mutex::new(Some(input)),
+            queued_input: AtomicUsize::new(0),
             child: Mutex::new(SessionChild {
                 child,
                 reaped: None,
@@ -365,28 +382,51 @@ impl PtyService {
     }
 
     /// Queues `data` for the session and returns without waiting for the program. The surface that
-    /// sends it records the write as a replay input when the completion holds its result.
+    /// sends it records the write as a replay input when the completion holds its result. Input of
+    /// a person is refused when the queue would exceed its bound; a reply of the engine is queued
+    /// whatever the bound, and the session then stops reading output until the queue drains.
     pub fn write(
         &self,
         session_id: &str,
+        origin: WriteOrigin,
         data: impl Into<Arc<[u8]>>,
     ) -> Result<WriteCompletion, String> {
         let session = self.session(session_id)?;
         if *session.recover(&session.closed, "closed") {
             return Err("session is closed".into());
         }
+        let data: Arc<[u8]> = data.into();
+        let size = data.len();
+        // The count rises before the write is queued, so the I/O task never removes bytes that it
+        // did not see added. A refused or unqueued write takes its bytes out again.
+        let queued = session.queued_input.fetch_add(size, Ordering::AcqRel);
+        if origin == WriteOrigin::Person && queued + size > QUEUED_INPUT_BYTES {
+            session.queued_input.fetch_sub(size, Ordering::AcqRel);
+            return Err(format!(
+                "the session input queue holds {queued} bytes, and {size} more exceed its bound of {QUEUED_INPUT_BYTES} bytes"
+            ));
+        }
         let (done, completion) = oneshot::channel();
-        session
+        let sent = session
             .recover(&session.input, "input")
             .as_ref()
-            .ok_or_else(|| "session writer is closed".to_string())?
-            .send(QueuedWrite {
-                data: data.into(),
-                written: 0,
-                done,
-            })
-            .map_err(|_| "session writer is closed".to_string())?;
-        Ok(completion)
+            .ok_or_else(|| "session writer is closed".to_string())
+            .and_then(|input| {
+                input
+                    .send(QueuedWrite {
+                        data,
+                        written: 0,
+                        done,
+                    })
+                    .map_err(|_| "session writer is closed".to_string())
+            });
+        match sent {
+            Ok(()) => Ok(completion),
+            Err(error) => {
+                session.queued_input.fetch_sub(size, Ordering::AcqRel);
+                Err(error)
+            }
+        }
     }
 
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -543,24 +583,52 @@ struct SessionIo {
 
 /// Reads and writes one session. It reads only while it holds a permit of the output channel, so a
 /// consumer that falls behind stops reads and nothing else, and it writes the queued input in order
-/// whenever the master accepts bytes. It ends at the end of the child or at close.
+/// whenever the master accepts bytes. While the queued input exceeds its bound, reads stop and the
+/// service reports it through `DaemonEvent::InputHeld`. It ends at the end of the child or at close.
 async fn session_io(mut io: SessionIo) {
     let mut queue = VecDeque::<QueuedWrite>::new();
-    let mut permit = None;
+    let mut permit: Option<mpsc::OwnedPermit<DaemonEvent>> = None;
     let mut reading = true;
     let mut consumer_ended = false;
     let mut input_open = true;
+    let mut held = false;
+    // The queued bytes of the last change of `held` that the consumer has not received yet.
+    let mut held_report: Option<usize> = None;
     let mut buffer = vec![0; OUTPUT_CHUNK_BYTES];
     let session = io.session.clone();
     let ended = loop {
+        let queued = session.queued_input.load(Ordering::Acquire);
+        if (queued > QUEUED_INPUT_BYTES) != held {
+            held = !held;
+            held_report = Some(queued);
+            session.log.emit_for(
+                Level::Warn,
+                "sidecar.alacritty.input_held",
+                Subject::session(&session.id, &[]),
+                &serde_json::json!({"queued": queued, "bound": QUEUED_INPUT_BYTES, "held": held}),
+            );
+        }
+        if consumer_ended {
+            held_report = None;
+        }
+        if let Some(queued) = held_report
+            && let Some(reserved) = permit.take()
+        {
+            reserved.send(DaemonEvent::InputHeld {
+                session_id: session.id.clone(),
+                queued,
+                held,
+            });
+            held_report = None;
+        }
         tokio::select! {
-            reserved = io.output.clone().reserve_owned(), if permit.is_none() && reading && !consumer_ended => {
+            reserved = io.output.clone().reserve_owned(), if permit.is_none() && !consumer_ended && ((reading && !held) || held_report.is_some()) => {
                 match reserved {
                     Ok(reserved) => permit = Some(reserved),
                     Err(_) => consumer_ended = true,
                 }
             }
-            ready = io.stream.readable(), if reading && (permit.is_some() || consumer_ended) => {
+            ready = io.stream.readable(), if reading && !held && (permit.is_some() || consumer_ended) => {
                 let mut ready = match ready {
                     Ok(ready) => ready,
                     Err(error) => {
@@ -603,7 +671,7 @@ async fn session_io(mut io: SessionIo) {
                     Ok(ready) => ready,
                     Err(error) => {
                         for write in queue.drain(..) {
-                            complete_write(write, Err(format!("write PTY: {error}")));
+                            complete_write(&session, write, Err(format!("write PTY: {error}")));
                         }
                         continue;
                     }
@@ -614,15 +682,16 @@ async fn session_io(mut io: SessionIo) {
                     Err(_would_block) => {}
                     Ok(Ok(size)) => {
                         write.written += size;
+                        session.queued_input.fetch_sub(size, Ordering::AcqRel);
                         if write.written == write.data.len() {
                             let write = queue.pop_front().expect("the front write exists");
-                            complete_write(write, Ok(()));
+                            complete_write(&session, write, Ok(()));
                         }
                     }
                     Ok(Err(error)) if error.kind() == ErrorKind::Interrupted => {}
                     Ok(Err(error)) => {
                         let write = queue.pop_front().expect("the front write exists");
-                        complete_write(write, Err(format!("write PTY: {error}")));
+                        complete_write(&session, write, Err(format!("write PTY: {error}")));
                     }
                 }
             }
@@ -670,9 +739,13 @@ async fn session_io(mut io: SessionIo) {
     .await;
 }
 
-/// Hands a write its result. A surface that ended no longer holds the receiver, and the write has
+/// Hands a write its result and removes the bytes of it that the master has not accepted from the
+/// queued input of the session. A surface that ended no longer holds the receiver, and the write has
 /// its record through the error of that surface.
-fn complete_write(write: QueuedWrite, result: Result<(), String>) {
+fn complete_write(session: &Session, write: QueuedWrite, result: Result<(), String>) {
+    session
+        .queued_input
+        .fetch_sub(write.data.len() - write.written, Ordering::AcqRel);
     // default: a surface that ended has no use for the result of its write.
     let _ = write.done.send(result);
 }
