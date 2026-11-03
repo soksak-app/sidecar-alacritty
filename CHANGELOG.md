@@ -1,5 +1,6 @@
 # Changelog
 
+- S84: An inline image scrolled partly past the top edge stays visible until its last row leaves the frame: the top of an image is signed, and the store keeps the height at which the frame draws it.
 - S83: A valid inline image past an edge of the frame draws clipped, and an image wholly outside the frame draws nothing, so the frame draws instead of failing with `Frame draw failed`.
 - S81: An inline image is decoded with ImageIO when it is stored: an image that does not decode is rejected with `sequence.rejected` and no image, and the frame draws without it, instead of failing the whole frame with `Frame draw failed`.
 - S80: A request line has the 64 MiB message limit: a line over it is refused with `message exceeds 67108864 bytes` and ends the input of its connection, because the line reader stops after a decoder error.

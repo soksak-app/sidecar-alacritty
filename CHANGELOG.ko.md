@@ -1,5 +1,6 @@
 # Changelog
 
+- S84: 위쪽 가장자리 너머로 일부 scroll된 inline image는 마지막 row가 frame을 떠날 때까지 보인다. image의 top은 부호를 가지고, store는 frame이 그리는 높이를 보관한다.
 - S83: frame 가장자리를 넘는 유효한 inline image는 잘려서 그리고, frame 밖에 완전히 있는 image는 그리지 않으므로, frame은 `Frame draw failed`로 실패하지 않고 그려진다.
 - S81: inline image는 저장할 때 ImageIO로 디코드한다. 디코드할 수 없는 그림은 `sequence.rejected`로 거부되고 그림을 남기지 않으며, 프레임은 `Frame draw failed`로 전체가 실패하지 않고 그림 없이 그린다.
 - S80: 요청 줄은 64 MiB message 상한을 가진다. 상한을 넘는 줄은 `message exceeds 67108864 bytes`로 거부되고 연결의 입력을 끝낸다. 줄 reader가 decoder 오류 뒤 멈추기 때문이다.
