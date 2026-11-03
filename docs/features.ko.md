@@ -2,6 +2,7 @@
 
 [English](features.md)
 
+- [ ] S94 — P2: checklist의 모든 link가 대상의 heading에 닿는다. 입력: S1-1과 S1-11(+ko)이 `spec/alacritty-core.md#gpu-frame`을 link한다. 동작: session의 frame이 strip frame이 된 뒤(S1-13) 명세에는 `GPU frame` heading이 없어서 이 link는 heading에 닿지 않고, 이 저장소의 어떤 검사도 anchor를 읽지 않는다. 기대: S1-1과 S1-11(+ko)이 자기가 말하는 frame을 설명하는 heading을 link하고, records kit의 record 검사가 대상에 없는 heading으로 가는 link를 거부한다.
 - [o] S92 — P0: S90, S91을 담은 alacritty sidecar release를 게시하고 registry에 올리며 이를 쓰는 plugin이 요구하게 한다. 모든 manifest가 0.0.6을 밝힌다. 결과: release run이 v0.0.6을 게시했고 registry가 이를 올렸다.
 - [o] S91 — P0: 터미널 영역을 벗어난 포인터 점은 가장 가까운 칸에 속한다. 입력: page view가 이미 네이티브 영역보다 커진 창 크기 변경 중의 hover 이동. 동작: 그 점이 `selection coordinates are outside the terminal region`로 실패하여 터미널이 오류로 표시했다. 기대: 그 점은 마지막 열이나 행에 속하고, 유한하지 않거나 음수인 점은 오류로 남는다. Red: 변경 전 mapping에서 `a_mouse_point_past_the_region_is_accepted_and_a_failure_keeps_its_input_identity`와 `test_selection_in_the_region_padding_selects_to_the_last_edge`가 실패했다. Green: 같은 test가 통과한다.
 - [o] S90 — P0: `view` 이벤트가 그 frame의 격자를 싣는다. 입력: 새 격자의 frame에서 그 격자의 `state` 이벤트보다 `view` 이벤트가 먼저 page에 도착한 경우. 동작: 이벤트에 격자가 없어 page가 마지막으로 아는 격자로 caret을 판정해 거부했다. 기대: `view`가 `rows`와 `cols`를 싣는다. Red: tracked test `a_frame_sends_its_view_when_the_cursor_or_the_scrollback_changes`가 `view["rows"].is_u64()`에서 실패했다. Green: 통과한다.
