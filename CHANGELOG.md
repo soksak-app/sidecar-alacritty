@@ -1,5 +1,6 @@
 # Changelog
 
+- S20: Version 0.0.4, which carries S19.
 - S19: Output that the frame clock holds builds no screen.
 - S1-5: The comparison with the VT sidecar is measured: a frame of a status line takes 1.5 ms of application CPU against 12.4 ms, and a frame of 20 rewritten rows takes 4.1 ms against 14.6 ms.
 - S1-17: The sidecar is released as 0.0.3.
