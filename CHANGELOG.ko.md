@@ -1,5 +1,6 @@
 # Changelog
 
+- S75: `vte::Parser` 하나가 terminal 앞에서 sequence를 찾아, CAN, SUB로 끝난 OSC가 뒤의 출력이나 mark를 잡아 두지 않고, 제어 byte가 든 erase는 제자리에서 지우며, 알 수 없는 CSI, DCS, ESC는 payload 없이 `sequence.rejected`를 내고, 1402200 byte를 넘는 sequence는 거부된다.
 - S84: 위쪽 가장자리 너머로 일부 scroll된 inline image는 마지막 row가 frame을 떠날 때까지 보인다. image의 top은 부호를 가지고, store는 frame이 그리는 높이를 보관한다.
 - S83: frame 가장자리를 넘는 유효한 inline image는 잘려서 그리고, frame 밖에 완전히 있는 image는 그리지 않으므로, frame은 `Frame draw failed`로 실패하지 않고 그려진다.
 - S81: inline image는 저장할 때 ImageIO로 디코드한다. 디코드할 수 없는 그림은 `sequence.rejected`로 거부되고 그림을 남기지 않으며, 프레임은 `Frame draw failed`로 전체가 실패하지 않고 그림 없이 그린다.

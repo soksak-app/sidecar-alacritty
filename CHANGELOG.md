@@ -1,5 +1,6 @@
 # Changelog
 
+- S75: One `vte::Parser` finds the sequences before the terminal, so an OSC ended by CAN, SUB or ESC no longer holds later output or marks, an erase with a control byte inside it erases in place, an unknown CSI, DCS or ESC produces `sequence.rejected` without its payload, and a sequence over 1402200 bytes is rejected.
 - S84: An inline image scrolled partly past the top edge stays visible until its last row leaves the frame: the top of an image is signed, and the store keeps the height at which the frame draws it.
 - S83: A valid inline image past an edge of the frame draws clipped, and an image wholly outside the frame draws nothing, so the frame draws instead of failing with `Frame draw failed`.
 - S81: An inline image is decoded with ImageIO when it is stored: an image that does not decode is rejected with `sequence.rejected` and no image, and the frame draws without it, instead of failing the whole frame with `Frame draw failed`.
