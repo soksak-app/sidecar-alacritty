@@ -4,14 +4,16 @@ use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::policy::Class;
 use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, screen_cells};
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant, MissedTickBehavior};
+use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A request of a client while the service handles it: what a reply and the request event need. The
@@ -4965,7 +4967,10 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let buf_reader = BufReader::new(PolledReader::new(reader, options.log.clone()));
+    let lines = FramedRead::new(
+        PolledReader::new(reader, options.log.clone()),
+        LinesCodec::new_with_max_length(REQUEST_LINE_LIMIT),
+    );
     let (output_sender, output_rx) = mpsc::channel::<String>(100);
     let connection = Connection::new(output_sender, options.log.clone());
     let transfers = connection.transfers.clone();
@@ -4978,7 +4983,7 @@ where
 
     let output_trace = options.log.clone();
     let input_task = async {
-        let result = run_input_loop(buf_reader, output_tx, options).await;
+        let result = run_input_loop(lines, output_tx, options).await;
         // No reply comes to a connection whose input has ended.
         transfers.end();
         result
@@ -4989,8 +4994,11 @@ where
     Ok(())
 }
 
+/// The message limit of a sidecar: 67108864 bytes before the newline (docs/spec/alacritty-core.md).
+const REQUEST_LINE_LIMIT: usize = 64 * 1024 * 1024;
+
 async fn run_input_loop<R>(
-    mut buf_reader: BufReader<R>,
+    mut lines: FramedRead<PolledReader<R>, LinesCodec>,
     output_tx: OutputSink,
     options: ServeOptions,
 ) -> std::io::Result<()>
@@ -5015,7 +5023,6 @@ where
     let mut surface_txs: HashMap<String, mpsc::Sender<Dispatch>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
-    let mut line = String::new();
     let connection_output = output_tx.connection().await;
     // Of the transfer images that this connection carried, the ones that a surface released. Their
     // replies come on this connection.
@@ -5027,29 +5034,52 @@ where
     let mut ended_surfaces = Vec::new();
 
     loop {
-        line.clear();
         let waiting = std::time::Instant::now();
-        let n = buf_reader.read_line(&mut line).await?;
+        let next = lines.next().await;
         let idle = waiting.elapsed();
 
-        if n == 0 {
-            if registry.is_none() {
-                // The surface actions of a connection that is not persistent close their sessions
-                // and end, because nothing can consume those sessions afterward.
-                for (key, tx) in &surface_txs {
-                    if tx
-                        .send(Dispatch::internal(SurfaceCommand::ConnectionEnded))
-                        .await
-                        .is_err()
-                    {
-                        ended_surfaces.push(key.clone());
-                    }
+        let line = match next {
+            Some(Ok(line)) => line,
+            // A line over the limit is refused with an explicit error. The codec ends its stream
+            // after a decoder error (tokio-util `FramedRead`: after an error, the next poll returns
+            // `None`), so the refusal is the last reply of this connection; the next iteration
+            // takes the end of input below.
+            Some(Err(LinesCodecError::MaxLineLengthExceeded)) => {
+                let reason = format!("message exceeds {REQUEST_LINE_LIMIT} bytes");
+                log.record_error("request line", &reason);
+                let reply = json!({
+                    "surface": "",
+                    "body": {"error": "invalidParams", "reason": reason}
+                });
+                if output_tx.send(reply.to_string()).await.is_err() {
+                    log.record_error(
+                        "request line",
+                        "the output of the connection ended before the refusal",
+                    );
+                    break;
                 }
-            } else {
-                output_tx.detach_connection(&connection_output).await;
+                continue;
             }
-            break;
-        }
+            Some(Err(LinesCodecError::Io(error))) => return Err(error),
+            None => {
+                if registry.is_none() {
+                    // The surface actions of a connection that is not persistent close their
+                    // sessions and end, because nothing can consume those sessions afterward.
+                    for (key, tx) in &surface_txs {
+                        if tx
+                            .send(Dispatch::internal(SurfaceCommand::ConnectionEnded))
+                            .await
+                            .is_err()
+                        {
+                            ended_surfaces.push(key.clone());
+                        }
+                    }
+                } else {
+                    output_tx.detach_connection(&connection_output).await;
+                }
+                break;
+            }
+        };
 
         let trimmed = line.trim();
         if trimmed.is_empty() {

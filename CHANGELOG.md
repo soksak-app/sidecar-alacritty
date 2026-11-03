@@ -1,5 +1,6 @@
 # Changelog
 
+- S80: A request line has the 64 MiB message limit: a line over it is refused with `message exceeds 67108864 bytes` and ends the input of its connection, because the line reader stops after a decoder error.
 - S86: A reconnect reports the input that the session holds, because the session reports it only when the state changes.
 - S74: Closing a session ends the jobs of its shell; the behavior landed with S73-5, and its three tests pass.
 - S85: The job test waits for the report of its job instead of a timer, and the exit test waits for the refusal of a signal without a time budget.

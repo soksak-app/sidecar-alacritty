@@ -1,5 +1,6 @@
 # Changelog
 
+- S80: 요청 줄은 64 MiB message 상한을 가진다. 상한을 넘는 줄은 `message exceeds 67108864 bytes`로 거부되고 연결의 입력을 끝낸다. 줄 reader가 decoder 오류 뒤 멈추기 때문이다.
 - S86: session은 상태가 바뀔 때만 잡은 입력을 보고하므로, 재연결이 이를 보고한다.
 - S74: 세션을 닫으면 그 shell의 job이 끝난다. 동작은 S73-5에서 들어갔고, 세 test가 통과한다.
 - S85: job test는 timer 대신 job의 보고를 기다리고, exit test는 time budget 없이 signal의 거부를 기다린다.

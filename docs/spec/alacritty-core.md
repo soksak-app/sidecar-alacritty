@@ -8,6 +8,8 @@ The `sidecar.json` declaration gives the service the process display identity `s
 
 An envelope that does not parse is answered with `{surface, body: {error: "invalidParams", reason}}` on its surface when its `surface` is a string, so the answer reaches the surface that sent it; `reason` is `cids must be a list of strings` when `cids` is not a list of strings, and `Parse error: <text>` otherwise. A line without a readable `surface` is answered with an empty surface and `Parse error: <text>`.
 
+The service reads its input as one envelope per line. A line has a limit of 67108864 bytes (64 MiB) before its newline, the message limit of the sidecar specification. A line over the limit is answered with `{surface: "", body: {error: "invalidParams", reason: "message exceeds 67108864 bytes"}}` and recorded as the error `request line`; the line reader stops after a decoder error, so the input of the connection ends after that answer and the end of input is handled as at a closed input.
+
 Every `screen` message keeps raw engine cursor `row` and `col` as the canonical screen-hash and replay coordinates and includes required `caret` for the visible frame-effective caret. `caret` is `{row, col}` when the message names an accepted frame, and `null` when no accepted frame exists, including while a changed screen awaits a new frame. An object is screen-local and comes from the same layout as its frame; consumers use it for native caret placement. It is not part of the canonical screen hash. Missing `caret`, or an invalid object for an accepted frame, is rejected; there is no fallback.
 
 | Request | Body | Meaning |

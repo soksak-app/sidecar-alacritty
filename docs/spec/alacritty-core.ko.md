@@ -8,6 +8,8 @@
 
 파싱되지 않는 봉투는 `surface`가 문자열이면 그 표면에 `{surface, body: {error: "invalidParams", reason}}`로 답한다. 그래서 답이 보낸 표면에 닿는다. `cids`가 문자열 목록이 아니면 `reason`은 `cids must be a list of strings`이고, 그 밖이면 `Parse error: <text>`다. 읽을 수 있는 `surface`가 없는 줄은 빈 surface와 `Parse error: <text>`로 답한다.
 
+서비스는 입력을 줄마다 봉투 하나로 읽는다. 한 줄은 newline 앞까지 67108864 bytes(64 MiB)의 상한을 가지며, 이는 sidecar 명세의 message 상한이다. 상한을 넘는 줄은 `{surface: "", body: {error: "invalidParams", reason: "message exceeds 67108864 bytes"}}`로 답하고 `request line` 오류로 기록한다. 줄 reader는 decoder 오류 뒤 멈추므로, 연결의 입력은 그 답 뒤에 끝나고 끝난 입력과 같이 처리된다.
+
 모든 `screen` 메시지는 canonical screen hash와 replay에 사용하는 raw engine cursor `row`, `col`을 유지하고, 화면의 frame-effective caret을 위한 필수 `caret`을 포함한다. Accepted frame이 있으면 `caret`은 `{row, col}`이고, 변경된 화면의 새 frame을 기다리는 동안을 포함해 accepted frame이 없으면 `null`이다. Object는 화면 좌표이며 frame과 같은 layout에서 계산한다. Native caret 배치에는 `caret`을 사용한다. 이 값은 canonical screen hash에 포함되지 않는다. 필드 누락 또는 accepted frame의 잘못된 object는 fallback 없이 거부한다.
 
 | 요청 | 본문 | 의미 |
