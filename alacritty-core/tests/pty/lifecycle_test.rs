@@ -35,10 +35,21 @@ async fn closing_a_running_session_records_the_kill_of_its_process_group() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
     let events = crate::events::test_support::TestEvents::new();
     let service = PtyService::new(events.handle());
-    let (tx, _rx) = crate::pty::output_channel();
+    let (tx, mut rx) = crate::pty::output_channel();
     let session_id = service
-        .open("/bin/sh", &["-c".into(), "cat".into()], None, 80, 24, tx)
+        .open(
+            "/bin/sh",
+            &["-c".into(), "trap '' HUP; echo ready; sleep 30".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
         .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let mut seen = Vec::new();
+    while !seen.windows(5).any(|part| part == b"ready") {
+        seen.extend(next_output(&mut rx).await);
+    }
     service.close(&session_id).unwrap();
     let kills = named(&events, "sidecar.alacritty.kill");
     let group = kills
@@ -301,10 +312,7 @@ async fn close_ends_a_session_whose_held_reads_stop_the_echo_of_its_queue() {
     }
     service.close(&session_id).unwrap();
     let consumer = tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    assert!(
-        !matches!(reply.await, Ok(Ok(()))),
-        "the queued reply reported success after close"
-    );
+    assert_eq!(reply.await.unwrap(), Err("session closed".to_string()));
     consumer.abort();
 }
 
@@ -565,6 +573,314 @@ async fn the_end_of_the_child_fails_queued_input_and_closes_the_master() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_releases_the_reserved_permit_of_the_output_channel() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let probe = tx.clone();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    service.close(&session_id).unwrap();
+    output_until_exit(&mut rx).await;
+    assert_eq!(probe.capacity(), probe.max_capacity());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn last_output_goes_to_a_free_slot_and_a_close_records_what_it_does_not_send() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let events = crate::events::test_support::TestEvents::new();
+    let service = PtyService::new(events.handle());
+    let (session_tx, mut session_rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            session_tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let session = service.session(&session_id).unwrap();
+    // The I/O task waits for the close signal until it ends, so the signal below reaches this call.
+    service.close(&session_id).unwrap();
+    output_until_exit(&mut session_rx).await;
+    let chunk = || DaemonEvent::Output {
+        session_id: session_id.clone(),
+        data: b"last".to_vec(),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    crate::pty::send_last_output(&session, &tx, chunk(), 4).await;
+    assert!(matches!(
+        next_event(&mut rx).await,
+        DaemonEvent::Output { .. }
+    ));
+    assert!(named(&events, "sidecar.alacritty.buffer_dropped").is_empty());
+
+    tx.send(chunk()).await.unwrap();
+    session.close.notify_one();
+    crate::pty::send_last_output(&session, &tx, chunk(), 4).await;
+    let dropped = named(&events, "sidecar.alacritty.buffer_dropped");
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(dropped[0]["fields"]["bytes"], 4);
+}
+
+// The reaper reports the end while close runs, and the report and the close can both be ready.
+// A close that was requested decides the reason whichever of them the task takes first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_requested_when_the_child_is_reaped_decides_and_exit_follows_once() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let queued = service
+        .write(&session_id, WriteOrigin::Person, lines(1024 * 1024))
+        .unwrap();
+    let session = service.session(&session_id).unwrap();
+    *session.recover(&session.closed, "closed") = true;
+    let pid = session
+        .recover(&session.child, "child")
+        .child
+        .process_id()
+        .unwrap();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    output_until_exit(&mut rx).await;
+    assert_eq!(queued.await.unwrap(), Err("session closed".to_string()));
+    assert!(rx.recv().await.is_none(), "an event followed the Exit");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_close_returns_ok_while_the_first_runs_and_names_a_removed_session_after_it() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, _rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "sleep 60".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let session = service.session(&session_id).unwrap();
+    *session.recover(&session.closed, "closed") = true;
+    assert_eq!(service.close(&session_id), Ok(()));
+    *session.recover(&session.closed, "closed") = false;
+    service.close(&session_id).unwrap();
+    assert_eq!(
+        service.close(&session_id),
+        Err(format!("session {session_id} not found"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_writes_nothing_to_the_program() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let folder = tempfile::tempdir().unwrap();
+    let received = folder.path().join("received");
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let script = format!(
+        "stty -echo; echo ready; while read line; do echo \"$line\" >> '{}'; echo stored; done",
+        received.display()
+    );
+    let session_id = service
+        .open("/bin/sh", &["-c".into(), script], None, 80, 24, tx)
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let mut seen = Vec::new();
+    while !seen.windows(5).any(|part| part == b"ready") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    service
+        .write(&session_id, WriteOrigin::Person, &b"typed\n"[..])
+        .unwrap();
+    while !seen.windows(6).any(|part| part == b"stored") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    service.close(&session_id).unwrap();
+    assert_eq!(std::fs::read_to_string(&received).unwrap(), "typed\n");
+}
+
+// The master closes before the wait for the child, so a child that holds unread output ends on close.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn close_ends_a_child_that_holds_unread_output() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, _rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "head -c 100000000 /dev/zero".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    // Nothing consumes the output, so the child blocks in its write with output that it holds.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let closing = service.clone();
+    let id = session_id.clone();
+    let closed = tokio::task::spawn_blocking(move || closing.close(&id));
+    timeout(Duration::from_secs(10), closed)
+        .await
+        .expect("the close waited for a child that holds unread output")
+        .unwrap()
+        .unwrap();
+}
+
+/// A process that a test started in a session. It ends with the test when the behavior under test
+/// left it running.
+struct Job(nix::unistd::Pid);
+
+impl Job {
+    fn alive(&self) -> bool {
+        nix::sys::signal::kill(self.0, None).is_ok()
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        // default: a job that the test ended has no process left to signal.
+        let _ = nix::sys::signal::kill(self.0, nix::sys::signal::Signal::SIGKILL);
+    }
+}
+
+/// Starts an interactive shell without its startup files and a job with the operator `background`,
+/// and returns the session and the process of the job. A hangup within 10 ms after the prompt ends
+/// zsh without passing it to its jobs, as measured on macOS, and the shell reports nothing when
+/// that time ended, so this waits past it with a timer.
+async fn shell_with_job(
+    service: &PtyService,
+    rx: &mut tokio::sync::mpsc::Receiver<DaemonEvent>,
+    tx: tokio::sync::mpsc::Sender<DaemonEvent>,
+    background: &str,
+) -> (String, Job) {
+    let session_id = service
+        .open("/bin/zsh", &["-f".into(), "-i".into()], None, 80, 24, tx)
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    service
+        .write(
+            &session_id,
+            WriteOrigin::Person,
+            format!("sleep 1000 {background} echo job=$!; PROMPT=at-''prompt\n").into_bytes(),
+        )
+        .unwrap();
+    let mut seen = String::new();
+    while !seen.contains("at-prompt") {
+        seen.push_str(&String::from_utf8_lossy(&next_output(rx).await));
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let pid = seen
+        .split("job=")
+        .filter_map(|part| {
+            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<i32>().ok()
+        })
+        .last()
+        .expect("the shell reported no job");
+    (session_id, Job(nix::unistd::Pid::from_raw(pid)))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_a_session_ends_the_jobs_of_its_shell() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let (session_id, job) = shell_with_job(&service, &mut rx, tx, "&").await;
+    service.close(&session_id).unwrap();
+    // The end of a process of another parent produces no event for this test.
+    timeout(Duration::from_secs(10), async {
+        while job.alive() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        let state = std::process::Command::new("/bin/ps")
+            .args(["-o", "pid,ppid,pgid,stat,command", "-p", &job.0.to_string()])
+            .output()
+            .unwrap();
+        panic!(
+            "the job of the shell outlived the close of its session: {}",
+            String::from_utf8_lossy(&state.stdout)
+        )
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closing_a_session_leaves_a_disowned_job_running() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let service = PtyService::new(crate::events::test_support::TestEvents::new().handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let (session_id, job) = shell_with_job(&service, &mut rx, tx, "&!").await;
+    service.close(&session_id).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(job.alive(), "the close ended a disowned job");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_program_that_ignores_the_hangup_of_a_close_ends_by_the_kill() {
+    let _test_lock = crate::platform::pty::native_pty_test_lock();
+    let events = crate::events::test_support::TestEvents::new();
+    let service = PtyService::new(events.handle());
+    let (tx, mut rx) = crate::pty::output_channel();
+    let session_id = service
+        .open(
+            "/bin/sh",
+            &["-c".into(), "trap '' HUP; echo ready; sleep 30".into()],
+            None,
+            80,
+            24,
+            tx,
+        )
+        .expect("PTY setup failed; environmental PTY errors must fail this test");
+    let mut seen = Vec::new();
+    while !seen.windows(5).any(|part| part == b"ready") {
+        seen.extend(next_output(&mut rx).await);
+    }
+    service.close(&session_id).unwrap();
+    output_until_exit(&mut rx).await;
+    let signals: Vec<_> = named(&events, "sidecar.alacritty.kill")
+        .iter()
+        .map(|line| {
+            (
+                line["fields"]["target"].as_str().unwrap().to_string(),
+                line["fields"]["signal"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(signals[0], ("child".to_string(), "SIGHUP".to_string()));
+    assert!(
+        signals.contains(&("process group".to_string(), "SIGKILL".to_string())),
+        "{signals:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_that_the_consumer_reads_is_not_dropped() {
     let _test_lock = crate::platform::pty::native_pty_test_lock();
     let events = crate::events::test_support::TestEvents::new();
@@ -782,11 +1098,17 @@ fn observed_session(
     with_group: bool,
 ) -> Arc<Mutex<Option<std::process::ExitStatus>>> {
     use std::os::unix::process::CommandExt;
-    let inner = std::process::Command::new("/bin/sleep")
-        .arg(seconds.to_string())
-        .process_group(0)
-        .spawn()
-        .expect("spawn the session child");
+    let mut command = std::process::Command::new("/bin/sleep");
+    command.arg(seconds.to_string()).process_group(0);
+    // The child ignores the hangup of close, so these tests observe the SIGKILL that follows it.
+    // SAFETY: signal is async-signal-safe, and the closure runs between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+            Ok(())
+        });
+    }
+    let inner = command.spawn().expect("spawn the session child");
     let group = inner.id() as i32;
     let (started_sender, started) = std::sync::mpsc::channel();
     let status = Arc::new(Mutex::new(None));
