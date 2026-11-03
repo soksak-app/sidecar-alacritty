@@ -1,5 +1,6 @@
 # Changelog
 
+- S73: The output of a program no longer grows the service: reads stop at a full output channel, and the children of this item hold the Red and Green.
 - S79: OSC 7 rejects a URI of another scheme, such as `kitty-shell-cwd://`, with an explicit error: only `file` URIs are accepted, as the terminal protocol spec states.
 - S78: A synchronized update (DEC 2026) that is never closed ends at its deadline, 150 ms after its opening sequence: the frame clock calls `stop_sync`, the held output is drawn, and the timer exists only while an update is held.
 - S77: Inline images keep moving with output at the history limit: the scroll generation counts the rows that the limit dropped, and the rows of every input are counted in slices of 999 bytes, so a flood recycles the cached rows without an allocation per row.
