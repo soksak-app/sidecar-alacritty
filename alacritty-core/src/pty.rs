@@ -129,6 +129,8 @@ struct Session {
     input: Mutex<Option<mpsc::UnboundedSender<QueuedWrite>>>,
     /// The bytes of the queue that the master has not accepted yet.
     queued_input: AtomicUsize,
+    /// The bytes of queued input at which reads stop and input of a person is refused.
+    input_bound: usize,
     child: Mutex<SessionChild>,
     /// The reaper thread notifies after it records reaped of the child.
     child_reaped: Condvar,
@@ -203,6 +205,8 @@ pub struct PtyService {
     /// The variables set in the environment of each child before the shell integration and the
     /// locale read it; `None` removes the variable that the child would inherit.
     environment: Vec<(String, Option<OsString>)>,
+    /// The bytes of queued input that each session of the service holds at most.
+    input_bound: usize,
     log: Events,
 }
 
@@ -235,6 +239,7 @@ impl PtyService {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             environment: Vec::new(),
+            input_bound: QUEUED_INPUT_BYTES,
             log,
         }
     }
@@ -243,6 +248,12 @@ impl PtyService {
     /// `None` removes the variable. The children inherit the environment of the process otherwise.
     pub fn with_environment(mut self, variables: Vec<(String, Option<OsString>)>) -> Self {
         self.environment = variables;
+        self
+    }
+
+    /// The service whose sessions queue at most `bytes` bytes of input before reads stop.
+    pub fn with_input_bound(mut self, bytes: usize) -> Self {
+        self.input_bound = bytes;
         self
     }
 
@@ -340,6 +351,7 @@ impl PtyService {
             process_group,
             input: Mutex::new(Some(input)),
             queued_input: AtomicUsize::new(0),
+            input_bound: self.input_bound,
             child: Mutex::new(SessionChild {
                 child,
                 reaped: None,
@@ -397,36 +409,36 @@ impl PtyService {
         }
         let data: Arc<[u8]> = data.into();
         let size = data.len();
-        // The count rises before the write is queued, so the I/O task never removes bytes that it
-        // did not see added. A refused or unqueued write takes its bytes out again.
-        let queued = session.queued_input.fetch_add(size, Ordering::AcqRel);
-        if origin == WriteOrigin::Person && queued + size > QUEUED_INPUT_BYTES {
-            session.queued_input.fetch_sub(size, Ordering::AcqRel);
+        let (done, completion) = oneshot::channel();
+        // The queue lock is held from the read of the count to the send, so writers add their bytes
+        // one at a time and no writer is refused for bytes that another writer adds and then takes
+        // back. The I/O task only lowers the count, which can admit a write that the bound allows.
+        let input = session.recover(&session.input, "input");
+        let sender = input
+            .as_ref()
+            .ok_or_else(|| "session writer is closed".to_string())?;
+        let queued = session.queued_input.load(Ordering::Acquire);
+        if origin == WriteOrigin::Person && queued + size > session.input_bound {
             return Err(format!(
-                "the session input queue holds {queued} bytes, and {size} more exceed its bound of {QUEUED_INPUT_BYTES} bytes"
+                "the session input queue holds {queued} bytes, and {size} more exceed its bound of {} bytes",
+                session.input_bound
             ));
         }
-        let (done, completion) = oneshot::channel();
-        let sent = session
-            .recover(&session.input, "input")
-            .as_ref()
-            .ok_or_else(|| "session writer is closed".to_string())
-            .and_then(|input| {
-                input
-                    .send(QueuedWrite {
-                        data,
-                        written: 0,
-                        done,
-                    })
-                    .map_err(|_| "session writer is closed".to_string())
-            });
-        match sent {
-            Ok(()) => Ok(completion),
-            Err(error) => {
-                session.queued_input.fetch_sub(size, Ordering::AcqRel);
-                Err(error)
-            }
+        // The count rises before the send, because the I/O task subtracts the bytes once it writes
+        // them, and a subtraction before the addition would wrap the count.
+        session.queued_input.fetch_add(size, Ordering::AcqRel);
+        if sender
+            .send(QueuedWrite {
+                data,
+                written: 0,
+                done,
+            })
+            .is_err()
+        {
+            session.queued_input.fetch_sub(size, Ordering::AcqRel);
+            return Err("session writer is closed".into());
         }
+        Ok(completion)
     }
 
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -598,14 +610,14 @@ async fn session_io(mut io: SessionIo) {
     let session = io.session.clone();
     let ended = loop {
         let queued = session.queued_input.load(Ordering::Acquire);
-        if (queued > QUEUED_INPUT_BYTES) != held {
+        if (queued > session.input_bound) != held {
             held = !held;
             held_report = Some(queued);
             session.log.emit_for(
                 Level::Warn,
                 "sidecar.alacritty.input_held",
                 Subject::session(&session.id, &[]),
-                &serde_json::json!({"queued": queued, "bound": QUEUED_INPUT_BYTES, "held": held}),
+                &serde_json::json!({"queued": queued, "bound": session.input_bound, "held": held}),
             );
         }
         if consumer_ended {

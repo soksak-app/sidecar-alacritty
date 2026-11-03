@@ -185,9 +185,26 @@ async fn serve_with(
     });
     let mut lines = BufReader::new(from_serve).lines();
     to_serve.write_all(input).await.unwrap();
+    let mut replies = Vec::new();
+    // An input is complete when its acknowledgement states that the master accepted its bytes, and
+    // the end of the connection closes the session, which refuses what is still queued.
+    while input
+        .windows(16)
+        .any(|part| part == b"\"operation\":\"input")
+        && !replies
+            .iter()
+            .any(|line: &String| line.contains("\"ack\":true"))
+    {
+        replies.push(
+            tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line())
+                .await
+                .expect("the input was not acknowledged")
+                .unwrap()
+                .expect("the serve loop ended before the input was acknowledged"),
+        );
+    }
     // The ending of the connection ends the serve loop after it handled every line that was sent.
     drop(to_serve);
-    let mut replies = Vec::new();
     while let Some(line) =
         tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line())
             .await

@@ -1,5 +1,6 @@
 # Changelog
 
+- S73-3-1: queue 입력의 상한은 queue lock 아래에서 검사하므로, 동시 write가 다른 write가 되돌린 바이트 때문에 거부되지 않는다. test session은 `PtyService::with_input_bound`로 상한을 정한다.
 - S73-3: queue의 입력 상한은 64 MiB다. 넘는 사람의 입력은 명시적 오류로 거부되고, 엔진 응답은 읽기를 멈추고 `input_held`를 보고한다.
 - S82: 잃어버린 write 결과의 default가 이유를 적으므로 source가 `make test`의 census를 통과한다.
 - S73-2: I/O task 하나가 세션을 읽고 쓴다. 읽기는 64 KiB 16 chunk에서 멈추고, write는 surface task에서 기다리지 않으며, surface는 write 결과로 acknowledgement를 보낸다.
