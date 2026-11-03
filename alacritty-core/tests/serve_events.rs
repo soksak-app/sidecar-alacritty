@@ -140,8 +140,12 @@ impl SessionPort for TracePort {
     ) -> Result<String, String> {
         Ok("perf-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -531,8 +535,12 @@ impl SessionPort for OutputPort {
     ) -> Result<String, String> {
         Ok("scripted-session".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -1007,8 +1015,12 @@ impl SessionPort for FailingOpenPort {
     ) -> Result<String, String> {
         Err("no shell".to_string())
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
@@ -1093,8 +1105,9 @@ async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
     let events = TestEvents::new();
     let engine_factory = Arc::new(|| Box::new(TraceEngine::default()) as Box<dyn Engine>);
     let factory = make_default_session_port_factory(events.handle());
-    // "\u{d55c}a\n" encoded in base64.
-    serve_with(
+    // "\u{d55c}a\n" encoded in base64. The connection stays open until the record of the write is
+    // stored: a write that is queued when the connection ends is completed with `session closed`.
+    serve_until(
         &events,
         engine_factory,
         factory,
@@ -1102,6 +1115,7 @@ async fn the_cids_of_an_input_request_reach_the_pty_write_event() {
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 {"surface":"s1","cids":["b1.42"],"body":{"operation":"input","actions":[{"type":"insert","text":"\ud55ca\n","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#,
+        "sidecar.alacritty.pty_write",
     )
     .await;
     let writes = events.named("sidecar.alacritty.pty_write");
@@ -1476,8 +1490,12 @@ impl SessionPort for HeldOpenPort {
             Err(_) => Err("released".to_string()),
         }
     }
-    async fn write(&self, _session_id: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+    async fn write(
+        &self,
+        _session_id: &str,
+        _data: std::sync::Arc<[u8]>,
+    ) -> Result<soksak_sidecar_alacritty_core::pty::WriteCompletion, String> {
+        Ok(soksak_sidecar_alacritty_core::pty::write_completed(Ok(())))
     }
     async fn resize(&self, _session_id: &str, _cols: u16, _rows: u16) -> Result<(), String> {
         Ok(())
