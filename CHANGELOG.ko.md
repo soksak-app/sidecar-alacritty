@@ -1,5 +1,6 @@
 # Changelog
 
+- S90: `view` 이벤트가 그 frame의 격자를 싣는다.
 - S89: 입력 요청의 flood test에 출력 수 상한이 없어 요청 도착이 더는 그 수와 경쟁하지 않는다.
 - S88: 공개된 0.0.5에서 45초 flood의 sidecar는 49 MB, application은 137 MB에 머문다. 한도를 두기 전에는 약 3 GB였다.
 - S87: S73부터 S86까지 담은 version 0.0.5.
