@@ -1,5 +1,6 @@
 # Changelog
 
+- S95: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S94: S1-1과 S1-11의 link가 specification에 더는 없는 GPU frame heading 대신 strip frame heading에 닿는다.
 - S92: 후보는 0.0.6이며 S90, S91를 담는다.
 - S91: 터미널 영역을 벗어난 포인터 점이 입력 실패 대신 가장 가까운 칸에 속한다.

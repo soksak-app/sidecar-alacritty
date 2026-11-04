@@ -1,5 +1,6 @@
 # Changelog
 
+- S95: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
 - S94: The links of S1-1 and S1-11 reach the strip frame heading of the specification instead of the GPU frame heading that it no longer has.
 - S92: The candidate is 0.0.6, which carries S90 and S91.
 - S91: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
