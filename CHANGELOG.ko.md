@@ -1,5 +1,6 @@
 # Changelog
 
+- S97: lifecycle test가 shell의 보고를 기다리므로, 먼저 보고한 job이 test를 더는 실패시키지 않는다.
 - S95: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S94: S1-1과 S1-11의 link가 specification에 더는 없는 GPU frame heading 대신 strip frame heading에 닿는다.
 - S92: 후보는 0.0.6이며 S90, S91를 담는다.
