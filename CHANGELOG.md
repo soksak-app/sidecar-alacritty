@@ -1,5 +1,6 @@
 # Changelog
 
+- S92: The candidate is 0.0.6, which carries S90 and S91.
 - S91: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
 - S90: The `view` event carries the grid of its frame.
 - S89: The flood test of an input request has no bound of outputs, so the arrival of the request no longer races the count.
