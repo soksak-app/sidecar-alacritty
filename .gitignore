@@ -1,3 +1,4 @@
 target/
 alacritty/build/
 node_modules/
+/build/

@@ -4,6 +4,7 @@
 - S97: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.
 - S95: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
 - S94: The links of S1-1 and S1-11 reach the strip frame heading of the specification instead of the GPU frame heading that it no longer has.
+- F460-alacritty: `.gitignore` names the local output folder `/build/`.
 - F466-alacritty: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-alacritty: The repository pins `@soksak/kit`.
 - F463-alacritty: The repository uses the checks kit and its one executable `soksak-check`.
