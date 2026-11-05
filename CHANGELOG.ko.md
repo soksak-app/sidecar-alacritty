@@ -1,5 +1,6 @@
 # Changelog
 
+- F474-alacritty: 후보는 0.0.7이며 실행 파일은 `sok-alacritty`와 `sok-alacritty-replay`이다.
 - F460-alacritty: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다.
 - F472-alacritty: 명령 이름이 하는 일을 말하고, `sok-check commands`가 이를 강제한다.
 - F468-alacritty: 저장소가 `event-sources.json`과 함께 kit의 `soksak-check docs`와 `soksak-check events`를 실행한다.

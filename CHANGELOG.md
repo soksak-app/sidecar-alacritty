@@ -1,5 +1,6 @@
 # Changelog
 
+- F474-alacritty: The candidate is 0.0.7, whose executables are `sok-alacritty` and `sok-alacritty-replay`.
 - F460-alacritty: `.gitignore` names the local output folder `/build/`.
 - F472-alacritty: The names of the commands state what they do, and `sok-check commands` holds them.
 - F468-alacritty: The repository runs `soksak-check docs` and `soksak-check events` of the kit with `event-sources.json`.
