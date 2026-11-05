@@ -3,7 +3,7 @@
 // connects as the host does and answers each frame: `consumed` for a region in the copy mode, or `leased` and then
 // `released` when the next frame replaces it for a region in the lease mode. It prints one JSON line.
 //
-//   node scripts/frame-benchmark.mjs --service <binary> --answer consumed|leased --workload idle|statusline|fullscreen
+//   node scripts/benchmark-frame.mjs --service <binary> --answer consumed|leased --workload idle|statusline|fullscreen
 //     [--seconds <n>] [--sample <file>]
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -112,7 +112,7 @@ async function main(options) {
         }
       }
     });
-    socket.write(`${JSON.stringify({ operation: "hello", protocol: 1, token: endpoint.token, client: "frame-benchmark" })}\n`);
+    socket.write(`${JSON.stringify({ operation: "hello", protocol: 1, token: endpoint.token, client: "benchmark-frame" })}\n`);
     send({ operation: "open", image: "view", shell: "/bin/sh" });
     send({ image: { configure: { name: "view", generation: 1, raster: 1, width: WIDTH, height: HEIGHT, scale: SCALE } } });
     await within(Promise.race([failed, drawn]), "the first frame");
@@ -154,7 +154,7 @@ async function main(options) {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(parseArguments(process.argv.slice(2))).catch((error) => {
-    process.stderr.write(`frame-benchmark: ${error.message}\n`);
+    process.stderr.write(`benchmark-frame: ${error.message}\n`);
     process.exit(1);
   });
 }

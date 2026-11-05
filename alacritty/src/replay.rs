@@ -352,7 +352,7 @@ fn main() -> std::process::ExitCode {
     match run(stdin.lock(), stdout.lock()) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("soksak-alacritty-replay: {error}");
+            eprintln!("sok-alacritty-replay: {error}");
             std::process::ExitCode::FAILURE
         }
     }

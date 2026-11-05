@@ -7,6 +7,7 @@
 - S95: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S94: S1-1과 S1-11의 link가 specification에 더는 없는 GPU frame heading 대신 strip frame heading에 닿는다.
 - F460-alacritty: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다.
+- F472-alacritty: 명령 이름이 하는 일을 말하고, `sok-check commands`가 이를 강제한다.
 - F468-alacritty: 저장소가 `event-sources.json`과 함께 kit의 `soksak-check docs`와 `soksak-check events`를 실행한다.
 - F466-alacritty: 저장소가 local build log와 임시 log의 인용을 보고하는 kit release를 pin한다.
 - F467-alacritty: 저장소가 `@soksak/kit`을 pin한다.

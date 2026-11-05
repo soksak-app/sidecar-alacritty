@@ -1,4 +1,4 @@
-// The push-check target runs the checks that a push needs, and the pre-push hook runs push-check on the pushed range (S72).
+// The check-push target runs the checks that a push needs, and the pre-push hook runs check-push on the pushed range (S72).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -21,9 +21,9 @@ function recipe(target, variables = []) {
 }
 
 // A published commit message is kept, so the push checks it; CI runs the tests on the pushed commits.
-test("make push-check runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
-  const commands = recipe("push-check");
-  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec soksak-check commits "origin/main..HEAD"']);
+test("make check-push runs only the commit message check of the pushed range (F274-vt-sidecar)", { timeout: 30000 }, () => {
+  const commands = recipe("check-push");
+  assert.deepEqual(commands.trim().split("\n"), ['pnpm exec sok-check commits "origin/main..HEAD"']);
 });
 
 test("make build and release pass an explicit diagnostics feature to Cargo (S78)", { timeout: 30000 }, () => {
@@ -65,7 +65,7 @@ test("make test runs every frame test of the diagnostics build (S1-15)", { timeo
   assert.doesNotMatch(line, / -E /);
 });
 
-test("make frame-benchmark runs the benchmark with the declared service, answer and workload (S1-14)", { timeout: 30000 }, () => {
-  const line = recipe("frame-benchmark", ["SERVICE=/bin/service", "ANSWER=consumed", "WORKLOAD=idle"]).trim().split("\n").at(-1);
-  assert.equal(line, "node scripts/frame-benchmark.mjs --service /bin/service --answer consumed --workload idle");
+test("make benchmark-frame runs the benchmark with the declared service, answer and workload (S1-14)", { timeout: 30000 }, () => {
+  const line = recipe("benchmark-frame", ["SERVICE=/bin/service", "ANSWER=consumed", "WORKLOAD=idle"]).trim().split("\n").at(-1);
+  assert.equal(line, "node scripts/benchmark-frame.mjs --service /bin/service --answer consumed --workload idle");
 });

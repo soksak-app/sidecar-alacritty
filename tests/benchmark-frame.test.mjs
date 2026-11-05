@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { WORKLOADS, cpuSeconds, parseArguments } from "../scripts/frame-benchmark.mjs";
+import { WORKLOADS, cpuSeconds, parseArguments } from "../scripts/benchmark-frame.mjs";
 
 test("the benchmark reads its arguments and refuses a missing or an unknown value", { timeout: 1000 }, () => {
   const base = ["--service", "/bin/service", "--answer", "leased", "--workload", "statusline"];
@@ -40,7 +40,7 @@ test("a stopped benchmark ends its service and removes its folder", { timeout: 2
     const service = join(temporary, "service.sh");
     const pidFile = join(temporary, "service.pid");
     writeFileSync(service, `#!/bin/sh\necho $$ > ${pidFile}\necho started >&2\nexec sleep 30\n`, { mode: 0o755 });
-    const script = fileURLToPath(new URL("../scripts/frame-benchmark.mjs", import.meta.url));
+    const script = fileURLToPath(new URL("../scripts/benchmark-frame.mjs", import.meta.url));
     const benchmark = spawn(process.execPath, [script, "--service", service, "--answer", "leased", "--workload", "idle"], {
       env: { ...process.env, TMPDIR: temporary },
       stdio: ["ignore", "ignore", "pipe"],

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 const root = new URL("../", import.meta.url).pathname;
-const binary = join(root, "alacritty/build/soksak-alacritty");
+const binary = join(root, "alacritty/build/sok-alacritty");
 const verifier = join(root, "scripts/verify-vt-recovery.mjs");
 
 function runVerifier(service = binary) {
