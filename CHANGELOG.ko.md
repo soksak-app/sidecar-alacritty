@@ -1,5 +1,6 @@
 # Changelog
 
+- F474-alacritty: release run이 v0.0.7을 게시했고 registry가 이를 올린다.
 - F474-alacritty: 후보는 0.0.7이며 실행 파일은 `sok-alacritty`와 `sok-alacritty-replay`이다.
 - F460-alacritty: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다.
 - F472-alacritty: 명령 이름이 하는 일을 말하고, `sok-check commands`가 이를 강제한다.
