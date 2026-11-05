@@ -1,5 +1,6 @@
 # Changelog
 
+- F476-alacritty: The tests repeat no declared version.
 - F474-alacritty: The release run published v0.0.7, and the registry lists it.
 - F474-alacritty: The candidate is 0.0.7, whose executables are `sok-alacritty` and `sok-alacritty-replay`.
 - F460-alacritty: `.gitignore` names the local output folder `/build/`.
