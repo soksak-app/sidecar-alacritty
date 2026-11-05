@@ -1,5 +1,6 @@
 # Changelog
 
+- F463-alacritty: 저장소가 checks kit과 실행 파일 하나 `soksak-check`를 쓴다.
 - S92: 후보는 0.0.6이며 S90, S91를 담는다.
 - S91: 터미널 영역을 벗어난 포인터 점이 입력 실패 대신 가장 가까운 칸에 속한다.
 - S90: `view` 이벤트가 그 frame의 격자를 싣는다.

@@ -1,5 +1,6 @@
 # Changelog
 
+- F463-alacritty: The repository uses the checks kit and its one executable `soksak-check`.
 - S92: The candidate is 0.0.6, which carries S90 and S91.
 - S91: A pointer point past the terminal region maps to the nearest cell instead of failing the input.
 - S90: The `view` event carries the grid of its frame.
