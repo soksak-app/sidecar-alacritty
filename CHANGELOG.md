@@ -6,6 +6,9 @@
 - S97: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.
 - S95: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
 - S94: The links of S1-1 and S1-11 reach the strip frame heading of the specification instead of the GPU frame heading that it no longer has.
+- F476-alacritty: The tests repeat no declared version.
+- F474-alacritty: The release run published v0.0.7, and the registry lists it.
+- F474-alacritty: The candidate is 0.0.7, whose executables are `sok-alacritty` and `sok-alacritty-replay`.
 - F460-alacritty: `.gitignore` names the local output folder `/build/`.
 - F472-alacritty: The names of the commands state what they do, and `sok-check commands` holds them.
 - F468-alacritty: The repository runs `soksak-check docs` and `soksak-check events` of the kit with `event-sources.json`.

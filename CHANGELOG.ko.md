@@ -6,6 +6,9 @@
 - S97: lifecycle test가 shell의 보고를 기다리므로, 먼저 보고한 job이 test를 더는 실패시키지 않는다.
 - S95: `rust-toolchain.toml`이 Rust 1.98.0을 선언하고 workflow가 그 version을 설치하므로, 한 commit의 모든 build가 같은 compiler를 쓴다.
 - S94: S1-1과 S1-11의 link가 specification에 더는 없는 GPU frame heading 대신 strip frame heading에 닿는다.
+- F476-alacritty: test가 선언된 version을 되풀이하지 않는다.
+- F474-alacritty: release run이 v0.0.7을 게시했고 registry가 이를 올린다.
+- F474-alacritty: 후보는 0.0.7이며 실행 파일은 `sok-alacritty`와 `sok-alacritty-replay`이다.
 - F460-alacritty: `.gitignore`가 local 출력 폴더 `/build/`를 지정한다.
 - F472-alacritty: 명령 이름이 하는 일을 말하고, `sok-check commands`가 이를 강제한다.
 - F468-alacritty: 저장소가 `event-sources.json`과 함께 kit의 `soksak-check docs`와 `soksak-check events`를 실행한다.
