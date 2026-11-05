@@ -1,5 +1,6 @@
 # Changelog
 
+- S99: A session opens without a configuration when its surface is hidden or its raster has no room for one cell, and a failed open answers the code `openFailed`, so the input that waits for a session receives an answer.
 - S98: The event file opens with schema 3, the number of the core event contract, so `sok debug query` reads it.
 - S97: The lifecycle test waits for the report of the shell, so a job that reports first no longer fails it.
 - S95: `rust-toolchain.toml` declares Rust 1.98.0, and the workflows install that version, so every build of a commit uses one compiler.
