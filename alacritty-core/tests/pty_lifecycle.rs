@@ -486,6 +486,8 @@ fn process_group_members_report_running_and_ended_processes() {
         members(group),
         Ok(vec![Member {
             pid: group,
+            uid: unsafe { libc::geteuid() },
+            command: "sleep".to_string(),
             zombie: false,
             exiting: false
         }])
@@ -577,6 +579,108 @@ fn a_process_group_whose_members_are_exiting_is_already_terminated() {
         result,
         Ok(soksak_sidecar_alacritty_core::platform::pty::KillResult::Ending),
         "members while exiting: {exiting:?}"
+    );
+}
+
+/// A login shell runs setuid programs in its process group: `brew shellenv` runs /bin/ps, which is
+/// setuid root. When close ends the shell while such a program is exiting, macOS refuses signals to
+/// the group with EPERM, and PROC_PIDTBSDINFO refuses to read the program with EPERM because its
+/// effective user is root. The program is ending, so close succeeds.
+#[test]
+fn a_process_group_whose_setuid_member_is_exiting_is_already_terminated() {
+    use std::io::BufRead;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::process::CommandExt;
+    let _test_lock = LIFECYCLE_LOCK.blocking_lock();
+    let _native_test_lock = native_pty_test_lock();
+    let (mut master, mut slave) = (0, 0);
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        opened,
+        0,
+        "openpty failed: {}",
+        std::io::Error::last_os_error()
+    );
+    let master = unsafe { std::os::fd::OwnedFd::from_raw_fd(master) };
+    // /bin/ps writes output that nobody reads, so its exit waits while the master is open.
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "/bin/ps -p $$ -c -o comm= & echo $! >&2; wait"])
+        .stdout(unsafe { std::process::Stdio::from_raw_fd(slave) })
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .expect("the shell must start");
+    let group = child.id() as i32;
+    // The shell tells the pid of /bin/ps, so the test reads no member before the call under test.
+    let mut line = String::new();
+    std::io::BufReader::new(child.stderr.take().expect("stderr is piped"))
+        .read_line(&mut line)
+        .expect("the shell must tell the pid of /bin/ps");
+    let member: i32 = line.trim().parse().expect("the pid of /bin/ps is a number");
+    let started = std::time::Instant::now();
+    let limit = std::time::Duration::from_secs(5);
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGHUP,
+    )
+    .expect("the hangup must reach the shell");
+    // Waits for the end of the shell without reaping, as the close of a session does.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            group as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(
+        waited,
+        0,
+        "waitid failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // No event reports the stage of an exit, so the test reads the answers of the kernel: a signal 0
+    // probe to the group and the full read of /bin/ps are both refused.
+    loop {
+        let signal_refused = unsafe { libc::kill(-group, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        let mut full: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let read = unsafe {
+            libc::proc_pidinfo(
+                member,
+                libc::PROC_PIDTBSDINFO,
+                1,
+                (&mut full as *mut libc::proc_bsdinfo).cast(),
+                size,
+            )
+        };
+        let read_refused =
+            read != size && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if signal_refused && read_refused {
+            break;
+        }
+        assert!(
+            started.elapsed() < limit,
+            "stage not reached in 5 s: signal refused {signal_refused}, read of {member} refused {read_refused}"
+        );
+        std::thread::yield_now();
+    }
+    let result = soksak_sidecar_alacritty_core::platform::pty::kill_process_group(Some(group));
+    drop(master);
+    child.wait().expect("the shell must be reaped");
+    assert_eq!(
+        result,
+        Ok(soksak_sidecar_alacritty_core::platform::pty::KillResult::Ending)
     );
 }
 
