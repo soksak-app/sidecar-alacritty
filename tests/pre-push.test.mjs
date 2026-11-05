@@ -8,14 +8,14 @@ import test from "node:test";
 const hook = new URL("../.githooks/pre-push", import.meta.url).pathname;
 const zero = "0000000000000000000000000000000000000000";
 
-// The pre-push hook passes the range of the pushed commits to `make push-check` (S72). The fixture Makefile writes the
+// The pre-push hook passes the range of the pushed commits to `make check-push` (S72). The fixture Makefile writes the
 // commits of that range, so each case reads the commits that the hook checked.
 const pushed = (remoteSha) => {
   const repository = mkdtempSync(join(tmpdir(), "alacritty-pre-push-"));
   try {
     const git = (...args) => execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
     git("init", "-q", "-b", "main");
-    writeFileSync(join(repository, "Makefile"), "push-check:\n\t@git rev-list --no-merges $(RANGE) > range.txt\n");
+    writeFileSync(join(repository, "Makefile"), "check-push:\n\t@git rev-list --no-merges $(RANGE) > range.txt\n");
     git("add", "Makefile");
     git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "first");
     const first = git("rev-parse", "HEAD");

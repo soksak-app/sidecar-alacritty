@@ -10,5 +10,5 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   if [ "$remote_sha" != "$zero" ]; then range="$remote_sha..$local_sha"
   elif git rev-parse -q --verify origin/main >/dev/null; then range="origin/main..$local_sha"
   else range="$local_sha"; fi
-  make -C "$root" push-check RANGE="$range" </dev/null || exit 1
+  make -C "$root" check-push RANGE="$range" </dev/null || exit 1
 done
