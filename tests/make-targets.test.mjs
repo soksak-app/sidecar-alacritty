@@ -15,6 +15,7 @@ function recipe(target, variables = []) {
   const env = { ...process.env };
   delete env.MAKEFLAGS;
   delete env.RANGE;
+  delete env.CARGO_TARGET_DIR;
   const result = spawnSync("make", ["-n", "--no-print-directory", ...variables, target], { cwd: root, encoding: "utf8", timeout: 30000, env });
   assert.equal(result.status, 0, `make -n ${target} failed: ${result.stderr}`);
   return result.stdout;
@@ -52,6 +53,16 @@ test("make test runs no doc test, so every Rust test has a nextest time and limi
 });
 
 // The installation stage is make install (core docs/spec/plugins.md#repositories); the build and the tests consume what it installed.
+// Cargo writes the executables where CARGO_TARGET_DIR names, so the copy reads the same folder (S101).
+test("make build copies the executables from the target directory of Cargo (S101)", { timeout: 30000 }, () => {
+  const named = recipe("build", ["CARGO_TARGET_DIR=/tmp/sidecar-alacritty-S101-dry-run"]);
+  assert.match(named, /^cp \/tmp\/sidecar-alacritty-S101-dry-run\/debug\/sok-alacritty alacritty\/build\/sok-alacritty$/m);
+  assert.match(named, /^cp \/tmp\/sidecar-alacritty-S101-dry-run\/debug\/sok-alacritty-replay alacritty\/build\/sok-alacritty-replay$/m);
+  const unnamed = recipe("build");
+  assert.match(unnamed, /^cp target\/debug\/sok-alacritty alacritty\/build\/sok-alacritty$/m);
+  assert.match(unnamed, /^cp target\/debug\/sok-alacritty-replay alacritty\/build\/sok-alacritty-replay$/m);
+});
+
 test("make install installs the locked dependencies, and no other target installs (F275-vt-sidecar)", { timeout: 30000 }, () => {
   assert.deepEqual(recipe("install").trim().split("\n"), ["pnpm install --frozen-lockfile"]);
   const makefile = readFileSync(path.join(root, "Makefile"), "utf8");
