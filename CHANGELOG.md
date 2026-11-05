@@ -1,5 +1,6 @@
 # Changelog
 
+- F460-alacritty: `.gitignore` names the local output folder `/build/`.
 - F466-alacritty: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-alacritty: The repository pins `@soksak/kit`.
 - F463-alacritty: The repository uses the checks kit and its one executable `soksak-check`.
