@@ -1,9 +1,14 @@
 //! Reads the members of a process group and their state.
 
 /// One member of a process group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
     pub pid: i32,
+    /// The effective user of the process. A member of another user, such as a setuid program,
+    /// refuses signals while it runs.
+    pub uid: u32,
+    /// The name of the executable, up to 16 bytes.
+    pub command: String,
     /// A process that has ended and is not reaped yet.
     pub zombie: bool,
     /// A process that is handling exit(). For example, it waits while a terminal with unread output
@@ -56,24 +61,34 @@ pub fn members(group: i32) -> Result<Vec<Member>, String> {
     pids.truncate(filled as usize / std::mem::size_of::<i32>());
     let mut members = Vec::new();
     for pid in pids.into_iter().filter(|pid| *pid > 0) {
-        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // PROC_PIDTBSDINFO answers ESRCH for a zombie when arg is 0, and finds the zombie too when
-        // arg is 1.
+        let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+        // PROC_PIDTBSDINFO answers EPERM when the effective user of the process differs from the
+        // effective user of the caller. A login shell runs setuid programs in its group, such as
+        // /bin/ps, which `brew shellenv` runs. PROC_PIDT_SHORTBSDINFO makes no check of the user.
+        // The arg 1 finds a zombie too.
         let read = unsafe {
             libc::proc_pidinfo(
                 pid,
-                libc::PROC_PIDTBSDINFO,
+                libc::PROC_PIDT_SHORTBSDINFO,
                 1,
-                (&mut info as *mut libc::proc_bsdinfo).cast(),
+                (&mut info as *mut libc::proc_bsdshortinfo).cast(),
                 size,
             )
         };
         if read == size {
+            let command = info
+                .pbsi_comm
+                .iter()
+                .take_while(|byte| **byte != 0)
+                .map(|byte| *byte as u8 as char)
+                .collect();
             members.push(Member {
                 pid,
-                zombie: info.pbi_status == libc::SZOMB,
-                exiting: info.pbi_flags & PROC_FLAG_INEXIT != 0,
+                uid: info.pbsi_uid,
+                command,
+                zombie: info.pbsi_status == libc::SZOMB,
+                exiting: info.pbsi_flags & PROC_FLAG_INEXIT != 0,
             });
             continue;
         }
