@@ -1,5 +1,6 @@
 # Changelog
 
+- F466-alacritty: 저장소가 local build log와 임시 log의 인용을 보고하는 kit release를 pin한다.
 - F467-alacritty: 저장소가 `@soksak/kit`을 pin한다.
 - F463-alacritty: 저장소가 checks kit과 실행 파일 하나 `soksak-check`를 쓴다.
 - S92: 후보는 0.0.6이며 S90, S91를 담는다.

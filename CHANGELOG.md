@@ -1,5 +1,6 @@
 # Changelog
 
+- F466-alacritty: The repository pins the kit release that reports a citation of a local build log or a temporary log.
 - F467-alacritty: The repository pins `@soksak/kit`.
 - F463-alacritty: The repository uses the checks kit and its one executable `soksak-check`.
 - S92: The candidate is 0.0.6, which carries S90 and S91.

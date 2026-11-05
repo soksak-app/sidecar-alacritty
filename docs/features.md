@@ -2,6 +2,7 @@
 
 [한국어](features.ko.md)
 
+- [o] F466-alacritty — P2, linked to core F466: The repository pins the kit release whose record check reports a citation of a local build log or a temporary log, and its records hold no such citation. Result: `make test` passes.
 - [o] F467-alacritty — P1, linked to core F467: The repository pins `@soksak/kit`, the one kit of the workspace. Input: it pinned `@soksak/kit-checks`. Result: `make test` passes.
 - [o] F463-alacritty — P0, linked to core F463: The repository uses the checks kit. Input: it pinned the records kit and the events kit and ran their commands. Expected: `package.json` pins `@soksak/kit-checks`, and its hooks, targets and workflows run `soksak-check`; the tests do not repeat the kit release of `package.json`. Red: its workflow tests read the earlier commands. Green: `make test` passes.
 - [o] S92 — P0: Publish a alacritty sidecar release that carries S90 and S91, list it in the registry, and make the plugin that uses it require it. Every manifest names 0.0.6. Result: the release run published v0.0.6, and the registry lists it.
