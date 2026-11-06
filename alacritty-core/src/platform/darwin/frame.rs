@@ -440,7 +440,7 @@ impl Frame {
         }
     }
 
-    /// A frame that keeps a strip per screen row and redraws only the strips of changed rows.
+    /// A frame that keeps the strips of rows keyed by row content and draws only the rows whose content no strip holds.
     pub fn new_strip(width_px: u32, height_px: u32) -> Option<Frame> {
         let ptr = unsafe { frame_new_strip(width_px, height_px) };
         if ptr.is_null() {

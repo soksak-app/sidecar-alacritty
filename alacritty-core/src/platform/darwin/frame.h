@@ -109,8 +109,8 @@ typedef struct Frame Frame;
 // 실패하면 NULL 을 반환한다
 Frame* frame_new(uint32_t width_px, uint32_t height_px);
 
-// Creates a frame of the given pixel size that keeps a strip per screen row and redraws only the strips of changed rows.
-// Returns NULL on failure.
+// Creates a frame of the given pixel size that keeps the strips of rows keyed by row content and draws only the rows whose
+// content no strip holds. Returns NULL on failure.
 Frame* frame_new_strip(uint32_t width_px, uint32_t height_px);
 
 // A frame keeps a pool of target surfaces. frame_hold marks the target with the surface id as held by the host, and

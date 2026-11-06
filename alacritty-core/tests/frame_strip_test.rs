@@ -451,3 +451,123 @@ fn an_image_surface_of_a_session_draws_on_the_strip_frame() {
         "the first draw of the image surface draws every row strip"
     );
 }
+
+// Line `n` of a scrolled screen: its number, letters with ink below the baseline and above the cap height, a wide character
+// with its spacer, an underlined cell and a color of its own, so two lines never draw the same strip.
+fn numbered_line(n: u32, cols: usize) -> Vec<Cell> {
+    let mut line: Vec<Cell> = (0..cols).map(|_| Cell::default()).collect();
+    let text: Vec<String> = format!("{n:03}gjÉ_|y").chars().map(String::from).collect();
+    for (col, cell) in line.iter_mut().enumerate() {
+        cell.ch = Some(text[col % text.len()].as_str().into());
+    }
+    line[cols - 3].ch = Some("한".into());
+    line[cols - 3].width = 2;
+    line[cols - 2].ch = None;
+    line[cols - 2].width = 0;
+    line[1].underline = true;
+    line[2].fg = Some(soksak_sidecar_alacritty_core::Rgb([
+        (n * 37 % 256) as u8,
+        0xaa,
+        0x44,
+    ]));
+    line
+}
+
+// A screen whose every row holds a line; the first row holds line `first`.
+fn numbered_screen(first: u32, cols: usize, rows: usize) -> Screen {
+    let mut screen = filled_screen(CursorShape::Block);
+    screen.cols = cols as u16;
+    screen.rows = rows as u16;
+    screen.cursor.col = 2;
+    screen.cursor.row = 1;
+    screen.lines = (0..rows as u32)
+        .map(|row| numbered_line(first + row, cols))
+        .collect();
+    screen
+}
+
+// A scroll moves every row of a full screen, so each row holds cells that an earlier draw drew at another row.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_scroll_of_a_full_screen_by_one_line_draws_one_strip() {
+    let metrics = metrics(13.0, 1.0);
+    let cols = 12;
+    let rows = 5;
+    let frame = Frame::new_strip(
+        metrics.cell_width as u32 * cols as u32,
+        metrics.cell_height as u32 * rows as u32,
+    )
+    .expect("strip frame");
+    let theme = TerminalTheme::dark();
+    let cursor = cursor_render(CursorShape::Block);
+    frame
+        .draw_with_theme(&numbered_screen(0, cols, rows), &metrics, cursor, &theme)
+        .expect("first draw");
+    assert_eq!(
+        frame.strips_drawn(),
+        rows as u32,
+        "the first draw draws every row"
+    );
+    frame
+        .draw_with_theme(&numbered_screen(1, cols, rows), &metrics, cursor, &theme)
+        .expect("scroll up");
+    assert_eq!(
+        frame.strips_drawn(),
+        1,
+        "a scroll up by one line draws only the line that entered"
+    );
+    frame
+        .draw_with_theme(&numbered_screen(0, cols, rows), &metrics, cursor, &theme)
+        .expect("scroll down");
+    assert_eq!(
+        frame.strips_drawn(),
+        0,
+        "a scroll back down draws no strip: the line that left is still kept"
+    );
+}
+
+// The strips that a scroll reuses hold the pixels that the CoreGraphics frame draws for each row: across scrolls up and
+// down, a line that returns, a repeated line, and a last row that the frame cuts, whose line is drawn again when a scroll
+// shows all of it.
+#[test]
+fn a_scrolled_strip_frame_has_the_pixels_of_the_coregraphics_frame() {
+    let metrics = metrics(13.0, 2.0);
+    let cols = 12;
+    let rows = 5;
+    let cell_height = metrics.cell_height as u32;
+    let width = metrics.cell_width as u32 * cols as u32 + 3;
+    let theme = TerminalTheme::dark();
+    let cursor = cursor_render(CursorShape::Block);
+    for (what, height) in [
+        ("margin below the rows", cell_height * rows as u32 + 5),
+        ("last row cut", cell_height * rows as u32 - cell_height / 2),
+    ] {
+        let strip = Frame::new_strip(width, height).expect("strip frame");
+        let mut repeated = numbered_screen(3, cols, rows);
+        repeated.lines[4] = repeated.lines[1].clone();
+        let screens = [
+            ("first", numbered_screen(0, cols, rows)),
+            ("up one", numbered_screen(1, cols, rows)),
+            ("up two", numbered_screen(3, cols, rows)),
+            ("down one", numbered_screen(2, cols, rows)),
+            ("repeated line", repeated),
+            ("back", numbered_screen(1, cols, rows)),
+        ];
+        for (step, screen) in screens {
+            let coregraphics = Frame::new(width, height).expect("coregraphics frame");
+            coregraphics
+                .draw_with_theme(&screen, &metrics, cursor, &theme)
+                .expect("coregraphics draw");
+            strip
+                .draw_with_theme(&screen, &metrics, cursor, &theme)
+                .expect("strip draw");
+            assert_same_pixels(
+                &coregraphics,
+                &strip,
+                width,
+                height,
+                &format!("{what}, {step}"),
+            );
+        }
+    }
+}

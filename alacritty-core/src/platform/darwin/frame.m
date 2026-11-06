@@ -28,14 +28,31 @@ struct Frame {
     uint8_t nonce[16];
     uint32_t width;
     uint32_t height;
-    // The strips of a strip frame: a surface of the frame size that holds row r at the rows of row r, the
-    // serialized cells of each row as it was drawn (a retained NSMutableArray of NSData) and the configuration they were
-    // drawn with (a retained NSData), and the count of strips that the last draw drew.
-    IOSurfaceRef strips;
+    // A strip frame keeps a strip store: slots of one row strip each, cell height pixel rows of the frame width, two for
+    // each row that the frame shows. A slot holds the strip of one row content, keyed by the serialized cells of that row
+    // (a retained NSMutableArray of NSData or NSNull, with a hash of each to skip unequal rows), so a row that moves on the
+    // screen reuses the strip of its cells. Each slot records the pixel rows that a draw filled (the frame cuts its last
+    // row when the rows do not fit) and the draw that last used it; a slot that no row of the current draw uses is dropped,
+    // the oldest first, when a row needs a new one. row_slots names the slot of each screen row of the last draw. The
+    // margin below the rows holds the default background at its own position, from margin_top to the frame height.
+    uint8_t strip;
+    uint8_t *store;
+    size_t slot_bytes;
+    uint32_t slot_count;
+    uint32_t slot_height;
+    uint64_t *slot_hashes;
+    uint32_t *slot_filled;
+    uint64_t *slot_used;
+    void *slot_cells;
+    uint32_t *row_slots;
+    uint8_t *margin;
+    uint32_t margin_top;
+    uint8_t margin_filled;
+    uint64_t draws;
     // The overlay of a strip frame: a surface of the frame size into which the CoreGraphics draw composites the inline
     // images over a copy of the strip pixels under them.
     IOSurfaceRef overlay;
-    void *rows;
+    // The configuration that the slots were drawn with (a retained NSData) and the count of strips that the last draw drew.
     void *configuration;
     uint32_t strips_drawn;
     FrameTarget *targets;
@@ -168,20 +185,20 @@ Frame* frame_new(uint32_t width_px, uint32_t height_px) {
     return frame_create(width_px, height_px);
 }
 
-// Creates a frame that keeps a strip per screen row and composes each draw on the CPU. A GPU pass is not used: its only work
-// is this copy and the rectangles of the cursor and the images, and the Metal driver keeps at least 70 MB for a process
-// that encodes any pass, while the copy costs less than a millisecond per frame (S1-13).
+// Creates a frame that keeps a strip store keyed by row content and composes each draw on the CPU. A GPU pass is not used:
+// its only work is this copy and the rectangles of the cursor and the images, and the Metal driver keeps at least 70 MB
+// for a process that encodes any pass, while the copy costs less than a millisecond per frame (S1-13). The first draw
+// sizes the store.
 Frame* frame_new_strip(uint32_t width_px, uint32_t height_px) {
     Frame *frame = frame_create(width_px, height_px);
     if (!frame) return NULL;
+    frame->strip = 1;
     uint8_t unused_nonce[16];
-    frame->strips = surface_create(width_px, height_px, unused_nonce);
     frame->overlay = surface_create(width_px, height_px, unused_nonce);
-    if (!frame->strips || !frame->overlay) {
+    if (!frame->overlay) {
         frame_drop(frame);
         return NULL;
     }
-    frame->rows = (__bridge_retained void *)[NSMutableArray array];
     return frame;
 }
 
@@ -673,6 +690,119 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
     return 0;
 }
 
+#define NO_SLOT UINT32_MAX
+
+// The pixels of pixel row y of the strips: the row of the slot of its screen row, or the margin below the rows.
+static const uint8_t *strip_row_pixels(const Frame *frame, uint32_t y) {
+    size_t pixel_row = (size_t)frame->width * 4;
+    if (y >= frame->margin_top) return frame->margin + (size_t)(y - frame->margin_top) * pixel_row;
+    uint32_t slot = frame->row_slots[y / frame->slot_height];
+    return frame->store + slot * frame->slot_bytes + (size_t)(y % frame->slot_height) * pixel_row;
+}
+
+// A hash of the serialized cells of a row, which skips the slots of other rows; equal bytes decide a match.
+static uint64_t row_hash(NSData *cells) {
+    const uint8_t *bytes = cells.bytes;
+    size_t length = cells.length;
+    uint64_t hash = 0x9E3779B97F4A7C15ULL ^ length;
+    size_t i = 0;
+    for (; i + 8 <= length; i += 8) {
+        uint64_t word;
+        memcpy(&word, bytes + i, 8);
+        hash = (hash ^ word) * 0xFF51AFD7ED558CCDULL;
+        hash ^= hash >> 32;
+    }
+    uint64_t tail = 0;
+    if (length > i) memcpy(&tail, bytes + i, length - i);
+    hash = (hash ^ tail) * 0xFF51AFD7ED558CCDULL;
+    return hash ^ (hash >> 32);
+}
+
+static void strip_store_free(Frame *frame) {
+    free(frame->store);
+    free(frame->slot_hashes);
+    free(frame->slot_filled);
+    free(frame->slot_used);
+    free(frame->row_slots);
+    free(frame->margin);
+    if (frame->slot_cells) CFRelease(frame->slot_cells);
+    frame->store = NULL;
+    frame->slot_hashes = NULL;
+    frame->slot_filled = NULL;
+    frame->slot_used = NULL;
+    frame->row_slots = NULL;
+    frame->margin = NULL;
+    frame->slot_cells = NULL;
+    frame->slot_count = 0;
+    frame->margin_filled = 0;
+}
+
+// Drops every strip, so the next draw draws every row and the margin.
+static void strip_store_clear(Frame *frame) {
+    NSMutableArray *cells = (__bridge NSMutableArray *)frame->slot_cells;
+    for (uint32_t slot = 0; slot < frame->slot_count; slot++) {
+        cells[slot] = [NSNull null];
+        frame->slot_filled[slot] = 0;
+        frame->slot_used[slot] = 0;
+    }
+    frame->margin_filled = 0;
+}
+
+// Sizes an empty store for a configuration: two slots for each screen row that the frame shows, a slot of the cell height,
+// and the margin from the end of the rows to the frame height. Returns -1 when an allocation fails.
+static int strip_store_reset(Frame *frame, Screen *screen, Metrics *metrics) {
+    strip_store_free(frame);
+    if (metrics->cell_height == 0) return -1;
+    uint64_t rows_height = (uint64_t)screen->height * metrics->cell_height;
+    uint32_t shown = (uint32_t)MIN((uint64_t)screen->height,
+                                   ((uint64_t)frame->height + metrics->cell_height - 1) / metrics->cell_height);
+    size_t pixel_row = (size_t)frame->width * 4;
+    frame->slot_height = metrics->cell_height;
+    frame->slot_bytes = pixel_row * metrics->cell_height;
+    frame->slot_count = 2 * shown;
+    frame->margin_top = (uint32_t)MIN(rows_height, (uint64_t)frame->height);
+    size_t slots = MAX(frame->slot_count, 1);
+    frame->store = malloc(slots * frame->slot_bytes);
+    frame->slot_hashes = calloc(slots, sizeof(uint64_t));
+    frame->slot_filled = calloc(slots, sizeof(uint32_t));
+    frame->slot_used = calloc(slots, sizeof(uint64_t));
+    frame->row_slots = calloc(MAX(screen->height, 1), sizeof(uint32_t));
+    frame->margin = malloc(MAX((size_t)(frame->height - frame->margin_top) * pixel_row, 1));
+    NSMutableArray *cells = [NSMutableArray arrayWithCapacity:frame->slot_count];
+    for (uint32_t slot = 0; slot < frame->slot_count; slot++) [cells addObject:[NSNull null]];
+    frame->slot_cells = (__bridge_retained void *)cells;
+    if (!frame->store || !frame->slot_hashes || !frame->slot_filled || !frame->slot_used || !frame->row_slots ||
+        !frame->margin) {
+        strip_store_free(frame);
+        return -1;
+    }
+    return 0;
+}
+
+// The slot that holds the strip of the cells, or NO_SLOT.
+static uint32_t strip_store_find(Frame *frame, uint64_t hash, NSData *row_cells) {
+    NSMutableArray *cells = (__bridge NSMutableArray *)frame->slot_cells;
+    for (uint32_t slot = 0; slot < frame->slot_count; slot++) {
+        if (frame->slot_hashes[slot] != hash) continue;
+        id held = cells[slot];
+        if (held != [NSNull null] && [(NSData *)held isEqualToData:row_cells]) return slot;
+    }
+    return NO_SLOT;
+}
+
+// A slot for the strip of new cells: an empty slot, otherwise the slot that the oldest draw used among the slots that the
+// current draw does not use. The rows of a draw use at most half of the slots, so a slot is always found.
+static uint32_t strip_store_take(Frame *frame) {
+    NSMutableArray *cells = (__bridge NSMutableArray *)frame->slot_cells;
+    uint32_t oldest = NO_SLOT;
+    for (uint32_t slot = 0; slot < frame->slot_count; slot++) {
+        if (cells[slot] == [NSNull null]) return slot;
+        if (frame->slot_used[slot] == frame->draws) continue;
+        if (oldest == NO_SLOT || frame->slot_used[slot] < frame->slot_used[oldest]) oldest = slot;
+    }
+    return oldest;
+}
+
 // Composites the visible inline images into the overlay surface: it copies the strip pixels of each image rectangle into
 // the overlay, then draws every image in order with the CGContextDrawImage call of the CoreGraphics frame, and appends the
 // rectangle of each image, limited to the frame, to rects. An image that does not decode returns -1.
@@ -703,23 +833,16 @@ static int frame_draw_overlay(Frame *frame, InlineImageRaster *images, uint32_t 
         [rects appendBytes:&item length:sizeof(item)];
     }
     if (decoded.count == 0) return 0;
-    if (IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
-    if (IOSurfaceLock(frame->overlay, 0, NULL) != kIOReturnSuccess) {
-        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
-        return -1;
-    }
-    const uint8_t *strip_base = IOSurfaceGetBaseAddress(frame->strips);
+    if (IOSurfaceLock(frame->overlay, 0, NULL) != kIOReturnSuccess) return -1;
     uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
-    size_t strip_row = IOSurfaceGetBytesPerRow(frame->strips);
     size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
     for (NSUInteger i = 0; i < decoded.count; i++) {
         const ComposeRect *rect = (const ComposeRect *)rects.bytes + i;
         for (uint32_t y = rect->top; y < rect->bottom; y++) {
-            memcpy(overlay_base + y * overlay_row + rect->left * 4, strip_base + y * strip_row + rect->left * 4,
+            memcpy(overlay_base + y * overlay_row + rect->left * 4, strip_row_pixels(frame, y) + rect->left * 4,
                    (rect->right - rect->left) * 4);
         }
     }
-    IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
     CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CGContextRef ctx = color_space ? CGBitmapContextCreateWithData(overlay_base, frame->width, frame->height, 8, overlay_row, color_space,
                                                                    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, NULL, NULL)
@@ -744,26 +867,20 @@ static void serialize_append(NSMutableData *data, const void *bytes, size_t leng
     [data appendBytes:bytes length:length];
 }
 
-// Copies the strips into the target surface and applies the rectangles. Returns -1 when a surface does not lock.
+// Copies the strips of the rows and the margin into the target surface and applies the rectangles. Returns -1 when a
+// surface does not lock.
 static int frame_compose(Frame *frame, NSData *rects) {
-    if (IOSurfaceLock(frame->strips, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
-    if (IOSurfaceLock(frame->overlay, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
-        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
-        return -1;
-    }
+    if (IOSurfaceLock(frame->overlay, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
     if (IOSurfaceLock(frame->surface, 0, NULL) != kIOReturnSuccess) {
         IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
-        IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
         return -1;
     }
-    const uint8_t *strip_base = IOSurfaceGetBaseAddress(frame->strips);
     const uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
     uint8_t *target_base = IOSurfaceGetBaseAddress(frame->surface);
-    size_t strip_row = IOSurfaceGetBytesPerRow(frame->strips);
     size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
     size_t target_row = IOSurfaceGetBytesPerRow(frame->surface);
     for (uint32_t y = 0; y < frame->height; y++) {
-        memcpy(target_base + y * target_row, strip_base + y * strip_row, (size_t)frame->width * 4);
+        memcpy(target_base + y * target_row, strip_row_pixels(frame, y), (size_t)frame->width * 4);
     }
     const ComposeRect *items = rects.bytes;
     for (NSUInteger i = 0; i < rects.length / sizeof(ComposeRect); i++) {
@@ -785,18 +902,43 @@ static int frame_compose(Frame *frame, NSData *rects) {
     }
     IOSurfaceUnlock(frame->surface, 0, NULL);
     IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
-    IOSurfaceUnlock(frame->strips, kIOSurfaceLockReadOnly, NULL);
     return 0;
 }
 
-// Draws the screen from strips. The CoreGraphics cell loop draws the rows whose cells differ from the cells their strip was
-// drawn with into the strip surface; frame_compose copies the strips into the target, which also fills the margin below the
-// rows with the default background, copies the inline images that frame_draw_overlay composited, and draws the cursor with
-// the fills of the CoreGraphics frame. It collects no render metadata (-3).
+// Copies the pixel rows of each row that the draw drew from the target surface into its slot, and the margin when the
+// store has none. Returns -1 when the target does not lock.
+static int strip_store_fill(Frame *frame, const uint8_t *rows, uint32_t row_count) {
+    if (IOSurfaceLock(frame->surface, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
+    const uint8_t *target_base = IOSurfaceGetBaseAddress(frame->surface);
+    size_t target_row = IOSurfaceGetBytesPerRow(frame->surface);
+    size_t pixel_row = (size_t)frame->width * 4;
+    for (uint32_t row = 0; row < row_count; row++) {
+        if (!rows[row]) continue;
+        uint32_t slot = frame->row_slots[row];
+        uint32_t top = row * frame->slot_height;
+        for (uint32_t y = 0; y < frame->slot_filled[slot]; y++) {
+            memcpy(frame->store + slot * frame->slot_bytes + y * pixel_row, target_base + (top + y) * target_row, pixel_row);
+        }
+    }
+    if (!frame->margin_filled) {
+        for (uint32_t y = frame->margin_top; y < frame->height; y++) {
+            memcpy(frame->margin + (size_t)(y - frame->margin_top) * pixel_row, target_base + y * target_row, pixel_row);
+        }
+        frame->margin_filled = 1;
+    }
+    IOSurfaceUnlock(frame->surface, kIOSurfaceLockReadOnly, NULL);
+    return 0;
+}
+
+// Draws the screen from strips. Each row that the frame shows takes the slot that holds the strip of its cells; the
+// CoreGraphics cell loop draws the rows whose cells no slot holds into the target surface, and their pixels fill new
+// slots. frame_compose copies the strip of each row and the margin below the rows into the target, copies the inline
+// images that frame_draw_overlay composited, and draws the cursor with the fills of the CoreGraphics frame. It collects no
+// render metadata (-3).
 static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output) {
     if (render_output) return -3;
-    // A change of the frame, the font or the default colors draws every strip.
+    // A change of the frame, the font or the default colors empties the store, so every row is drawn again.
     NSMutableData *configuration = [NSMutableData data];
     serialize_append(configuration, &frame->width, sizeof(frame->width));
     serialize_append(configuration, &frame->height, sizeof(frame->height));
@@ -808,10 +950,10 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     serialize_append(configuration, &metrics->font, sizeof(metrics->font));
     serialize_append(configuration, screen->default_foreground, 3);
     serialize_append(configuration, screen->default_background, 3);
-    NSMutableArray<NSData *> *drawn = (__bridge NSMutableArray<NSData *> *)frame->rows;
     if (![configuration isEqualToData:(__bridge NSData *)frame->configuration]) {
-        [drawn removeAllObjects];
         if (frame->configuration) CFRelease(frame->configuration);
+        frame->configuration = NULL;
+        if (strip_store_reset(frame, screen, metrics) != 0) return -1;
         frame->configuration = (__bridge_retained void *)configuration;
     }
     NSMutableArray<NSMutableData *> *cells = [NSMutableArray arrayWithCapacity:screen->height];
@@ -829,22 +971,50 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         uint8_t flags[4] = {cell->has_fg, cell->has_bg, cell->inverse, cell->underline};
         serialize_append(data, flags, sizeof(flags));
     }
+    frame->draws++;
+    NSMutableArray *slot_cells = (__bridge NSMutableArray *)frame->slot_cells;
     NSMutableData *selection = [NSMutableData dataWithLength:screen->height];
     uint8_t *rows = selection.mutableBytes;
     uint32_t count = 0;
     for (uint32_t row = 0; row < screen->height; row++) {
-        if (row < drawn.count && [drawn[row] isEqualToData:cells[row]]) continue;
+        // The pixel rows of this row inside the frame; a row below the frame has none and takes no slot.
+        uint64_t top = (uint64_t)row * frame->slot_height;
+        uint32_t shown = top >= frame->height ? 0 : (uint32_t)MIN((uint64_t)frame->slot_height, frame->height - top);
+        frame->row_slots[row] = NO_SLOT;
+        if (shown == 0) continue;
+        NSData *row_cells = cells[row];
+        uint64_t hash = row_hash(row_cells);
+        uint32_t slot = strip_store_find(frame, hash, row_cells);
+        frame->row_slots[row] = slot;
+        // A strip drawn at the last row, which the frame cuts, holds fewer pixel rows than a row above needs.
+        if (slot != NO_SLOT && frame->slot_filled[slot] >= shown) {
+            frame->slot_used[slot] = frame->draws;
+            continue;
+        }
+        if (slot == NO_SLOT) {
+            slot = strip_store_take(frame);
+            if (slot == NO_SLOT) {
+                // The slots that this draw took hold no pixels yet.
+                strip_store_clear(frame);
+                return -1;
+            }
+            frame->slot_hashes[slot] = hash;
+            slot_cells[slot] = row_cells;
+            frame->row_slots[row] = slot;
+        }
+        frame->slot_filled[slot] = shown;
+        frame->slot_used[slot] = frame->draws;
         rows[row] = 1;
         count++;
     }
-    if (count > 0) {
-        int result = frame_draw_cg(frame, frame->strips, screen, metrics, NULL, 0, NULL, rows);
+    if (count > 0 || !frame->margin_filled) {
+        int result = frame_draw_cg(frame, frame->surface, screen, metrics, NULL, 0, NULL, rows);
+        if (result == 0) result = strip_store_fill(frame, rows, screen->height);
         if (result != 0) {
-            // A strip that failed holds unknown pixels, so the next draw draws every strip.
-            [drawn removeAllObjects];
+            // A slot that the draw did not fill holds unknown pixels, so the next draw draws every row.
+            strip_store_clear(frame);
             return result;
         }
-        [drawn setArray:cells];
     }
     frame->strips_drawn = count;
 
@@ -939,8 +1109,13 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     if (!frame || !screen || !metrics) return -1;
     int selected = frame_select_target(frame);
     if (selected != 0) return selected;
-    if (frame->strips) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
-    return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+    // The caller is a thread without an autorelease pool, so the objects that a draw autoreleases are released when it
+    // returns instead of at the end of the thread: -bytes of an NSMutableData autoreleases the data, and a strip draw reads
+    // the bytes of each serialized row.
+    @autoreleasepool {
+        if (frame->strip) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
+        return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+    }
 }
 
 void frame_drop(Frame *frame) {
@@ -949,9 +1124,8 @@ void frame_drop(Frame *frame) {
             if (frame->targets[i].surface) CFRelease(frame->targets[i].surface);
         }
         free(frame->targets);
-        if (frame->strips) CFRelease(frame->strips);
+        strip_store_free(frame);
         if (frame->overlay) CFRelease(frame->overlay);
-        if (frame->rows) CFRelease(frame->rows);
         if (frame->configuration) CFRelease(frame->configuration);
         free(frame);
     }
