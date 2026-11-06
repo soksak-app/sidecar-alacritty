@@ -2,6 +2,9 @@
 # The release is the npm pack file of alacritty.
 .PHONY: install test build release release-candidate repeat check-push install-hooks benchmark-frame
 
+# rustup installs cargo here and adds the path to the shell profile. The shell of make does not read the profile (S108).
+export PATH := $(HOME)/.cargo/bin:$(PATH)
+
 # The oldest macOS that the sidecar runs on, the value of core (core Makefile MACOS_MINIMUM). Every command that runs Cargo,
 # and the node tests that start Cargo, give it as MACOSX_DEPLOYMENT_TARGET, which cc reads for the Objective-C objects and
 # rustc reads for the link (S107).

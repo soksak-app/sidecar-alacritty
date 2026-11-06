@@ -1,5 +1,6 @@
 # Changelog
 
+- S108: Makefile이 `~/.cargo/bin`을 PATH에 넣으므로 make의 shell이 shell profile 없이 rustup의 cargo를 찾는다.
 - S107: Cargo를 실행하는 모든 명령이 `node --test tests/`를 포함해 Makefile의 `MACOS_MINIMUM`인 macOS 14.4로 build하고, workspace가 `linker_info`를 거부하므로 더 새 macOS용 object의 link가 실패한다.
 - S106: event 계약의 golden fixture가 core의 바뀌지 않은 사본이고, 계약 test가 그 sidecar event 이름에 이 sidecar의 prefix를 준다.
 - S96: push check와 CI가 push 범위에 commit message 검사 뒤 kit 0.0.14의 체크리스트 이력 검사 `sok-check docs --range`를 실행한다.
