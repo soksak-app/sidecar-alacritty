@@ -1,6 +1,6 @@
 # Changelog
 
-- S108: The Makefile puts `~/.cargo/bin` on PATH, so the shell of make finds the cargo of rustup without the shell profile.
+- S108: The Makefile puts `~/.cargo/bin` on PATH and runs the cargo that it resolves there once, so make finds the cargo of rustup without the shell profile, also on a recipe line that GNU Make 3.81 runs without a shell.
 - S107: Every command that runs Cargo, `node --test tests/` included, builds for macOS 14.4, the `MACOS_MINIMUM` of the Makefile, and fails when the linker reports an object built for a newer macOS; the duplicate `-lc` of every link passes.
 - S106: The golden fixtures of the event contract are unchanged copies of core, and the contract test gives their sidecar event names the prefix of this sidecar.
 - S96: The push check and CI run the checklist history check `sok-check docs --range` of kit 0.0.14 on the pushed range, after the commit message check.

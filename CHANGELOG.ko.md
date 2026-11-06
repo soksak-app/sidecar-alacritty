@@ -1,6 +1,6 @@
 # Changelog
 
-- S108: Makefile이 `~/.cargo/bin`을 PATH에 넣으므로 make의 shell이 shell profile 없이 rustup의 cargo를 찾는다.
+- S108: Makefile이 `~/.cargo/bin`을 PATH에 넣고 거기서 한 번 정한 cargo를 실행하므로, GNU Make 3.81이 shell 없이 실행하는 recipe 줄에서도 make가 shell profile 없이 rustup의 cargo를 찾는다.
 - S107: Cargo를 실행하는 모든 명령이 `node --test tests/`를 포함해 Makefile의 `MACOS_MINIMUM`인 macOS 14.4로 build하고, linker가 더 새 macOS용 object를 보고하면 실패한다. 모든 link의 중복 `-lc`는 통과한다.
 - S106: event 계약의 golden fixture가 core의 바뀌지 않은 사본이고, 계약 test가 그 sidecar event 이름에 이 sidecar의 prefix를 준다.
 - S96: push check와 CI가 push 범위에 commit message 검사 뒤 kit 0.0.14의 체크리스트 이력 검사 `sok-check docs --range`를 실행한다.
