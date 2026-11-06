@@ -1,5 +1,6 @@
 # Changelog
 
+- S110: The memory test of the frame bounds the second 200 draws by the bytes in use of the malloc zones instead of the footprint, which moves by whole pages as the allocator keeps or returns free pages.
 - S109: make puts the bin folder of CARGO_HOME, `~/.cargo` when CARGO_HOME is unset, on PATH, so it finds the cargo that rustup installs on a GitHub runner.
 - S108: The Makefile puts `~/.cargo/bin` on PATH and runs the cargo that it resolves there once, so make finds the cargo of rustup without the shell profile, also on a recipe line that GNU Make 3.81 runs without a shell.
 - S107: Every command that runs Cargo, `node --test tests/` included, builds for macOS 14.4, the `MACOS_MINIMUM` of the Makefile, and fails when the linker reports an object built for a newer macOS; the duplicate `-lc` of every link passes.

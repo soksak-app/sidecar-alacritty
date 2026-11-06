@@ -37,6 +37,16 @@ fn footprint() -> u64 {
     info.ri_phys_footprint
 }
 
+// The bytes that the allocations of every malloc zone of this process hold. A draw that keeps memory of its own, such as
+// objects left in an autorelease pool, adds to it. Unlike the footprint, it does not move when the allocator keeps or
+// returns free pages: over 1000 draws that scroll after the store is full the footprint moved by up to 540672 bytes in
+// either direction while this value moved by at most 224 bytes (S110).
+fn bytes_in_use() -> u64 {
+    let mut stats: libc::malloc_statistics_t = unsafe { std::mem::zeroed() };
+    unsafe { libc::malloc_zone_statistics(std::ptr::null_mut(), &mut stats) };
+    stats.size_in_use as u64
+}
+
 fn screen() -> Screen {
     let cols = COLS;
     let rows = ROWS;
@@ -78,9 +88,9 @@ fn cursor() -> CursorRender {
     }
 }
 
-// Draws 400 frames, each after a change of the screen, and checks the growth of the footprint: in all, within the limit;
-// over the second 200 draws, after the store holds the strips of the workload, at most one strip, so a draw keeps no
-// memory of its own.
+// Draws 400 frames, each after a change of the screen. The growth of the footprint, which counts the surfaces, stays
+// within the limit. Over the second 200 draws, after the store holds the strips of the workload, the bytes in use grow by
+// at most one strip, so a draw keeps no memory of its own (S110).
 fn assert_growth(what: &str, change: fn(&mut Screen, usize)) {
     let metrics = metrics(13.0, 2.0);
     let frame = Frame::new_strip(WIDTH, HEIGHT).expect("strip frame");
@@ -90,20 +100,19 @@ fn assert_growth(what: &str, change: fn(&mut Screen, usize)) {
     let mut half = 0;
     for draw in 0..400usize {
         if draw == 200 {
-            half = footprint();
+            half = bytes_in_use();
         }
         change(&mut screen, draw);
         frame
             .draw_with_theme(&screen, &metrics, cursor(), &theme)
             .expect("draw");
     }
-    let after = footprint();
-    let grown = after.saturating_sub(before);
-    let steady = after.saturating_sub(half);
+    let steady = bytes_in_use().saturating_sub(half);
+    let grown = footprint().saturating_sub(before);
     let limit = growth_limit(&metrics);
     let strip = metrics.cell_height as u64 * WIDTH as u64 * 4;
     println!(
-        "{what}: the draws grew the footprint by {grown} bytes against the limit of {limit}, the second 200 by {steady} bytes against one strip of {strip}"
+        "{what}: the draws grew the footprint by {grown} bytes against the limit of {limit}, the second 200 kept {steady} bytes in use against one strip of {strip}"
     );
     assert!(
         grown <= limit,
@@ -111,7 +120,7 @@ fn assert_growth(what: &str, change: fn(&mut Screen, usize)) {
     );
     assert!(
         steady <= strip,
-        "{what}: the second 200 draws grew the footprint by {steady} bytes, past one strip of {strip} bytes"
+        "{what}: the second 200 draws kept {steady} bytes in use, past one strip of {strip} bytes"
     );
 }
 
