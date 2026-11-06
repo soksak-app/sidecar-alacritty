@@ -109,7 +109,7 @@
         ]
       }
     },
-    "sidecar.alacritty.pty_write": {
+    "sidecar.vt.pty_write": {
       "layer": "sidecar",
       "class": "io",
       "level": "info",
@@ -135,7 +135,7 @@
     "key": [
       "native.input.key_down",
       "page.terminal.send",
-      "sidecar.alacritty.pty_write"
+      "sidecar.vt.pty_write"
     ]
   }
 }

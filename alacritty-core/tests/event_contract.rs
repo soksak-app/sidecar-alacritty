@@ -1,6 +1,8 @@
 // The lines of the event writer satisfy the event contract of core (docs/spec/logging.md). The golden fixtures in
 // tests/fixtures/log-contract are copies of the fixtures of the contract; a line that the writer produces has the same
-// structure and satisfies the same catalog.
+// structure and satisfies the same catalog. The fixtures name the sidecar events of the contract with `sidecar.vt.`, and
+// this writer writes only names that start with `sidecar.alacritty.`, so the reader of the fixtures gives each such name
+// the prefix of this sidecar.
 use serde_json::{Value, json};
 use soksak_sidecar_alacritty_core::events::{
     EventLog, Level, Options, Subject, hex, read_lines, read_run_lines,
@@ -11,11 +13,18 @@ use std::time::{Duration, Instant};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// The sidecar prefix of the event names of the contract fixtures, and the prefix of the events of this writer.
+const FIXTURE_PREFIX: &str = "\"sidecar.vt.";
+const PREFIX: &str = "\"sidecar.alacritty.";
+
+/// A fixture of the contract, with each sidecar event name of the contract given the prefix of this sidecar.
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/log-contract")
         .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+        .replace(FIXTURE_PREFIX, PREFIX)
 }
 
 fn fixture_lines(name: &str) -> Vec<Value> {

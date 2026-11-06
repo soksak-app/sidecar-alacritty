@@ -1,5 +1,6 @@
 # Changelog
 
+- S106: event 계약의 golden fixture가 core의 바뀌지 않은 사본이고, 계약 test가 그 sidecar event 이름에 이 sidecar의 prefix를 준다.
 - S96: push check와 CI가 push 범위에 commit message 검사 뒤 kit 0.0.14의 체크리스트 이력 검사 `sok-check docs --range`를 실행한다.
 - S105: scroll은 옮기는 행의 strip을 다시 쓴다. 1520x1228 frame의 한 줄 scroll은 2.99–3.02 ms 대신 0.68–0.70 ms 걸린다.
 - S103: input과 paste의 모든 답이 요청의 cids를 밝히는 것을 test로 고정한다.
