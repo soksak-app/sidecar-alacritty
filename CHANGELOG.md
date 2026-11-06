@@ -1,5 +1,6 @@
 # Changelog
 
+- S105: A scroll reuses the strips of the rows it moves: a one-line scroll of a 1520x1228 frame takes 0.68–0.70 ms instead of 2.99–3.02 ms.
 - S103: A test fixes that every answer of an input or a paste names the cids of its request.
 - S102: The test of the frozen install reads the store that `make install` filled, so an answer of GitHub does not fail `make test`.
 - S101: `make build` copies the executables from the folder that `CARGO_TARGET_DIR` names, where Cargo wrote them.

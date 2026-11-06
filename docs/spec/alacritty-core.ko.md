@@ -185,19 +185,19 @@ surface는 session 출력을 33 ms frame clock으로 그린다. 마지막 frame 
 
 session의 image surface는 `Frame::new_strip`이 만든 frame으로 그린다. render metadata를 모으는 diagnostic build(`SOKSAK_ALACRITTY_TRACE_DIR`)는 CoreGraphics frame으로 그린다. render metadata를 보고하는 frame이 그것뿐이기 때문이다. 두 frame 모두 CPU로 그린다. strip frame의 pixel은 같은 화면의 CoreGraphics frame과 같으므로, CoreGraphics frame이 두 그리기의 유일한 기준이다.
 
-- frame은 strip surface에 화면 행마다 strip 하나를 둔다. strip은 CoreGraphics frame의 칸 loop가 그리므로, 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 hash가 그 strip을 그린 hash와 다를 때만 다시 그린다. 크기, 글꼴, theme이 바뀌면 모든 strip을 다시 그린다. 그래서 frame의 그리기 비용은 바뀐 행에 비례한다.
+- frame은 행의 칸을 key로 하는 strip store를 둔다. 그리기는 frame이 보여 주는 행마다 그 칸의 strip을 가져오고, CoreGraphics frame의 칸 loop는 칸을 담은 strip이 없는 행만 그린다. 그래서 글자, 넓은 글자, 밑줄, 그리고 `render_layout`이 칸에 넣은 preedit을 한 함수가 그린다. strip은 행의 위치에 따라 달라지지 않으므로, scroll처럼 움직인 행은 자기 strip을 그대로 쓴다. store는 frame이 보여 주는 행마다 strip 두 개를 담는다. 행에 새 strip이 필요하면 store는 가장 오래된 그리기가 쓴 strip을 버리고, 지금 그리기가 쓰는 strip은 버리지 않는다. frame이 자르는 마지막 행의 strip은 frame 안의 pixel 행만 담으므로, 뒤의 그리기가 그 행을 다 보여 줄 때 그 행을 다시 그린다. 크기, 글꼴, theme이 바뀌면 store를 비우므로 모든 행을 다시 그린다. 그래서 frame의 그리기 비용은 칸이 새로운 행에 비례한다.
 - 두 frame 모두 각 행을 그 행의 box로 자르므로, 행 위아래로 넘친 잉크는 그 행 안에서만 그린다.
-- strip은 행 아래 여백의 기본 배경도 담는다. CoreGraphics 그리기는 CoreGraphics frame의 `CGContextDrawImage` 호출로, 각 image 아래 strip pixel을 복사한 overlay surface 위에 inline image를 합성한다. 그리기는 strip을 target surface로 복사한 뒤 overlay의 image 사각형을 복사하고, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자나 image 위의 block cursor는 그 pixel을 반전한다.
+- store는 행 아래 여백도 그 자리의 기본 배경으로 담는다. CoreGraphics 그리기는 CoreGraphics frame의 `CGContextDrawImage` 호출로, 각 image 아래 strip pixel을 복사한 overlay surface 위에 inline image를 합성한다. 그리기는 각 행의 strip과 여백을 target surface로 복사한 뒤 overlay의 image 사각형을 복사하고, CoreGraphics frame의 채우기와 difference 채우기로 cursor를 그린다. 그래서 글자나 image 위의 block cursor는 그 pixel을 반전한다.
 - CoreGraphics가 투명한 surface에 그리고 나중에 합성하는 image tile은 CoreGraphics frame과 다르다. 반투명 test image에서 pixel이 최대 두 단계 달랐고, 그중 34개는 image가 불투명한 곳이었다. CoreGraphics가 투명한 surface 위와 덮는 pixel 위에서 image를 다르게 resampling하기 때문이다. overlay는 각 image를 CoreGraphics frame과 같은 pixel 위에 그리므로 구성상 정확하다.
 - 그리기는 동기적이다. target surface가 frame을 담은 뒤 돌아오므로, supplier는 마지막 쓰기 뒤에 envelope를 보낸다.
-- 그리기는 GPU pass를 쓰지 않는다. strip 뒤에 남는 일은 이 복사와 사각형 몇 개뿐이고, Metal driver는 pass를 encode한 process에 메모리를 잡아 둔다. 1520x1228 frame에서 footprint는 blit와 render pass로 178 MB, compute pass 하나로 96 MB, Metal 없이 16 MB 늘었다. frame의 CPU 시간은 늘지 않았다. 한 행이 바뀌는 frame은 1.27 ms, 모든 행이 바뀌는 frame은 3.08 ms이고, blit와 render pass일 때는 1.24 ms와 3.43 ms였다. test가 footprint 증가에 상한을 둔다(`frame_memory_test`).
+- 그리기는 GPU pass를 쓰지 않는다. strip 뒤에 남는 일은 이 복사와 사각형 몇 개뿐이고, Metal driver는 pass를 encode한 process에 메모리를 잡아 둔다. 1520x1228 frame에서 footprint는 blit와 render pass로 178 MB, compute pass 하나로 96 MB, Metal 없이 16 MB 늘었다. frame의 CPU 시간은 늘지 않았다. 한 행이 바뀌는 frame은 1.27 ms, 모든 행이 바뀌는 frame은 3.08 ms이고, blit와 render pass일 때는 1.24 ms와 3.43 ms였다. test가 footprint 증가에 상한을 둔다(`frame_memory_test`). 한 행을 바꾸는 그리기 400번과 한 줄씩 scroll하는 그리기 400번은 footprint를 target과 overlay surface, store, 30 MB 이하로 늘리고, 뒤 200번은 strip 하나 이하로 늘린다. 그리기는 autorelease한 객체를 돌아가기 전에 놓는다. 그리기를 부르는 thread에 autorelease pool이 없기 때문이다. 그렇게 하지 않으면 store가 읽는 직렬화된 행이 그리기 200번에 footprint를 22 MB 늘렸다.
 - 그리기가 다시 그린 strip 수는 진단 build의 render output에만 있다.
-- 한계: scroll은 모든 행을 바꾸므로 모든 strip을 다시 그린다. CoreGraphics frame이 모든 칸을 다시 그리는 것과 같다. strip을 행 내용으로 보관할지는 개발 뒤 scroll benchmark가 정한다.
+- 꽉 찬 화면의 한 줄 scroll은 strip 하나를 그린다(S105). store 전에는 scroll이 모든 strip을 그렸다. 95x39 칸인 1520x1228 frame 한 번 그리기의 CPU 시간, release profile에서 300번 그린 중앙값, 전후 세 번씩 측정(`frame_benchmark_test`): 한 행 변경은 전 0.64–0.76 ms, 후 0.64–0.67 ms, 모든 행 변경은 전 2.90–3.43 ms, 후 2.98–3.21 ms, 한 줄 scroll은 전 2.99–3.02 ms, 후 0.68–0.70 ms다. 이 frame을 400번 그리는 동안 footprint는 한 행 변경에서 전 17.1 MB, 후 10.7 MB, store를 채우는 한 줄 scroll에서 전 17.2 MB, 후 24.7 MB 늘었다.
 
 이유와, adversarial review가 제기하고 이 설계가 답한 반론:
 - CoreGraphics frame은 글자를 배경에 맞춰 smoothing한다(검은 배경의 흰 글자와 흰 배경의 검은 글자에서 잉크가 있는 pixel 1176개 중 709개가 보색이 아니었다). 그래서 배경과 무관한 coverage의 atlas로는 그 pixel을 재현할 수 없고, 칸 밖에서 합성하는 칸 단위 tile은 값이 다른 둘째 renderer다.
 - 자기 배경 위에 그린 칸 단위 tile은 앞 칸이 그 칸에 그린 잉크를 지우지만, CoreGraphics frame은 그것을 남긴다. 행 strip은 칸을 그리는 순서대로 담으므로 구성상 정확하다.
-- 칸 배경색을 key로 하는 cache는 색마다 커진다. strip은 화면 행 수로 제한된다.
+- 칸 배경색을 key로 하는 cache는 색마다 커진다. strip store는 frame이 보여 주는 행마다 strip 두 개로 제한된다.
 - 행 위치에 대한 반론은 거절했다. `H - (r + 1) × cell height`의 CoreGraphics 사각형은 아래쪽 원점 좌표이며 surface 메모리의 `r × cell height`부터 `(r + 1) × cell height`까지의 행을 덮고, 행 아래에 여백이 있는 test가 이를 검증한다.
 
 ### 터미널 검증

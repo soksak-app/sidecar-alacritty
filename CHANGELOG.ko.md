@@ -1,5 +1,6 @@
 # Changelog
 
+- S105: scroll은 옮기는 행의 strip을 다시 쓴다. 1520x1228 frame의 한 줄 scroll은 2.99–3.02 ms 대신 0.68–0.70 ms 걸린다.
 - S103: input과 paste의 모든 답이 요청의 cids를 밝히는 것을 test로 고정한다.
 - S102: frozen install test가 `make install`이 채운 store를 읽으므로, GitHub의 답이 `make test`를 실패시키지 않는다.
 - S101: `make build`가 Cargo가 실행 파일을 쓴 폴더, 곧 `CARGO_TARGET_DIR`이 가리키는 폴더에서 복사한다.
