@@ -88,40 +88,101 @@ fn cursor() -> CursorRender {
     }
 }
 
-// Draws 400 frames, each after a change of the screen. The growth of the footprint, which counts the surfaces, stays
-// within the limit. Over the second 200 draws, after the store holds the strips of the workload, the bytes in use grow by
-// at most one strip, so a draw keeps no memory of its own (S110).
+// The draws after the store holds the strips of the workload, the number of draws that the test makes, and the step of
+// the footprint samples (S110).
+const SETTLED: usize = 200;
+const DRAWS: usize = 1200;
+const SAMPLE_STEP: usize = 100;
+
+// The footprint and the bytes in use count the whole process, so one test draws at a time when cargo test runs both in
+// one process (S110).
+static ALONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// The least-squares slope of the samples, in bytes per draw.
+fn slope(samples: &[(f64, f64)]) -> f64 {
+    let count = samples.len() as f64;
+    let mean_x = samples.iter().map(|(x, _)| x).sum::<f64>() / count;
+    let mean_y = samples.iter().map(|(_, y)| y).sum::<f64>() / count;
+    let covariance: f64 = samples
+        .iter()
+        .map(|(x, y)| (x - mean_x) * (y - mean_y))
+        .sum();
+    let variance: f64 = samples
+        .iter()
+        .map(|(x, _)| (x - mean_x) * (x - mean_x))
+        .sum();
+    covariance / variance
+}
+
+// Draws 1200 frames, each after a change of the screen, and bounds three things.
+//
+// The growth of the footprint, which counts the surfaces, stays within the limit.
+//
+// Over the second 200 draws, after the store holds the strips of the workload, the bytes in use of the malloc zones grow
+// by at most one strip, so a draw keeps no allocation of its own (S110).
+//
+// The footprint also counts what malloc does not hold: IOSurfaces, the backing of CGImages, vm_allocate pages and the
+// caches of CoreText. Its least-squares slope over the 11 samples from draw 200 to draw 1200, one every 100 draws,
+// stays at or below one strip per 200 draws. The footprint moves in pages as the allocator keeps or returns free pages:
+// in 60 runs of 1200 scrolls its samples from draw 200 spread over a range of up to 540672 bytes, in steps both ways,
+// and their slopes lay between -127795 and 50350 bytes per 200 draws (S110). For samples evenly spaced, values anywhere
+// within a range R give a slope of at most R times the sum of the positive deviations of x over the sum of their
+// squares: 15 / 110 per step for 11 samples, 0.27 R per 200 draws, so the measured range moves the slope by at most
+// 147456 bytes, below one strip of 188480. Five samples over 400 draws give 3 / 10 per step, 0.6 R per 200 draws, which
+// that range passes. A draw that keeps one strip per 200 draws outside malloc adds 942400 bytes over the 1000 draws,
+// past the range of the steps (S110).
 fn assert_growth(what: &str, change: fn(&mut Screen, usize)) {
+    let _alone = ALONE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let metrics = metrics(13.0, 2.0);
     let frame = Frame::new_strip(WIDTH, HEIGHT).expect("strip frame");
     let theme = TerminalTheme::dark();
     let mut screen = screen();
     let before = footprint();
-    let mut half = 0;
-    for draw in 0..400usize {
-        if draw == 200 {
-            half = bytes_in_use();
-        }
+    let mut settled = 0;
+    let mut steady = 0;
+    let mut samples = Vec::new();
+    for draw in 0..DRAWS {
         change(&mut screen, draw);
         frame
             .draw_with_theme(&screen, &metrics, cursor(), &theme)
             .expect("draw");
+        let drawn = draw + 1;
+        if drawn == SETTLED {
+            settled = bytes_in_use();
+        }
+        if drawn == 2 * SETTLED {
+            steady = bytes_in_use().saturating_sub(settled);
+        }
+        if drawn >= SETTLED && drawn % SAMPLE_STEP == 0 {
+            samples.push((drawn as f64, footprint() as f64));
+        }
     }
-    let steady = bytes_in_use().saturating_sub(half);
     let grown = footprint().saturating_sub(before);
     let limit = growth_limit(&metrics);
     let strip = metrics.cell_height as u64 * WIDTH as u64 * 4;
+    let trend = slope(&samples) * SETTLED as f64;
     println!(
-        "{what}: the draws grew the footprint by {grown} bytes against the limit of {limit}, the second 200 kept {steady} bytes in use against one strip of {strip}"
+        "{what}: the draws grew the footprint by {grown} bytes against the limit of {limit}, the second 200 kept {steady} bytes in use and the footprint rose by {trend:.0} bytes per 200 draws, each against one strip of {strip}"
     );
-    assert!(
-        grown <= limit,
-        "{what}: the draws grew the footprint by {grown} bytes, past the limit of {limit} bytes"
-    );
-    assert!(
-        steady <= strip,
-        "{what}: the second 200 draws kept {steady} bytes in use, past one strip of {strip} bytes"
-    );
+    let mut failures = Vec::new();
+    if grown > limit {
+        failures.push(format!(
+            "the draws grew the footprint by {grown} bytes, past the limit of {limit} bytes"
+        ));
+    }
+    if steady > strip {
+        failures.push(format!(
+            "the second 200 draws kept {steady} bytes in use, past one strip of {strip} bytes"
+        ));
+    }
+    if trend > strip as f64 {
+        failures.push(format!(
+            "the footprint rose by {trend:.0} bytes per 200 draws from draw 200 to draw 1200, past one strip of {strip} bytes"
+        ));
+    }
+    assert!(failures.is_empty(), "{what}: {}", failures.join("; "));
 }
 
 #[test]

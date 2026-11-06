@@ -1,6 +1,6 @@
 # Changelog
 
-- S110: frame의 memory test가 뒤 200번 draw를 footprint 대신 malloc zone의 사용 중 bytes로 제한한다. footprint는 할당기가 빈 page를 붙잡거나 돌려줄 때 page 단위로 움직인다.
+- S110: frame의 memory test가 두 번째 200번 draw를 malloc zone의 사용 중 bytes로 제한하고, draw가 malloc 밖에 남기는 것은 200번 동안의 footprint 증가 대신 1000번에 걸친 footprint 기울기로 제한한다. footprint는 할당기가 빈 page를 붙잡거나 돌려줄 때 page 단위로 움직인다.
 - S109: make가 CARGO_HOME의 bin 폴더(CARGO_HOME이 없으면 `~/.cargo`)를 PATH에 넣으므로 GitHub runner에서 rustup이 설치한 cargo를 찾는다.
 - S108: Makefile이 `~/.cargo/bin`을 PATH에 넣고 거기서 한 번 정한 cargo를 실행하므로, GNU Make 3.81이 shell 없이 실행하는 recipe 줄에서도 make가 shell profile 없이 rustup의 cargo를 찾는다.
 - S107: Cargo를 실행하는 모든 명령이 `node --test tests/`를 포함해 Makefile의 `MACOS_MINIMUM`인 macOS 14.4로 build하고, linker가 더 새 macOS용 object를 보고하면 실패한다. 모든 link의 중복 `-lc`는 통과한다.
