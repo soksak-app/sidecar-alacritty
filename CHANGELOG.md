@@ -1,5 +1,6 @@
 # Changelog
 
+- S107: Every command that runs Cargo, `node --test tests/` included, builds for macOS 14.4, the `MACOS_MINIMUM` of the Makefile, and the workspace denies `linker_info`, so a link of an object built for a newer macOS fails.
 - S106: The golden fixtures of the event contract are unchanged copies of core, and the contract test gives their sidecar event names the prefix of this sidecar.
 - S96: The push check and CI run the checklist history check `sok-check docs --range` of kit 0.0.14 on the pushed range, after the commit message check.
 - S105: A scroll reuses the strips of the rows it moves: a one-line scroll of a 1520x1228 frame takes 0.68–0.70 ms instead of 2.99–3.02 ms.
