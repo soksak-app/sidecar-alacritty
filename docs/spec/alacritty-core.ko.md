@@ -2,6 +2,14 @@
 
 [English](alacritty-core.md)
 
+## 요청 시 기준 프레임 관찰 (S111)
+
+진단용 `screen.observe`는 양의 안전한 정수 `requestId`를 받는다. `screen.observed` 응답 하나에 그 ID와 실제 기준 draw의 `frame`, `render`, 전체 `cells`, `rows`, `cols`, `cursor`, `background`, `scrollback`을 담는다. 새 sequence를 만들 수 있지만, 새로 계산한 메타데이터를 이전 tuple에 붙이지 않는다. 일반 `screen.read` 응답은 이를 완료하지 못한다. 소비자는 일반 측정 구간 뒤 정확히 제시된 region과 캡처 픽셀을 별도로 검증한다.
+
+진행 중인 복사는 정확히 일치하는 `consumed`, `leased` 또는 오류 응답까지 보호된다. lease는 관찰 draw 전에 실제 target을 hold하며, 관찰은 사용 가능한 다른 target을 사용한다. `released`의 기존 소유권 검사도 유지한다. 중복 관찰은 `observationBusy`다. 진단 capability 부재나 미설정·그리기 중단 이미지는 `observationUnavailable`, draw 실패는 `observationFailed`, 자연 종료나 명시적 종료는 `observationClosed`, 잘못된 ID는 `invalidParams`다. 대기 중인 관찰은 원래 응답 sink를 보관하며 소유권 변경 시 명시적으로 끝난다.
+
+요청한 메타데이터 draw 한 번은 기존 strip 렌더러의 glyph draw, 내용별 행 저장소, overlay, cursor 합성, target 선택을 사용한다. 전체 메타데이터를 얻기 위해 행을 다시 그릴 수 있지만, 픽셀·이후 scroll 재사용·일반 메타데이터 정책·held surface는 유지해야 한다. 렌더러를 교체하거나 시작 시 trace를 켜거나 다른 저장소의 파일에 의존하지 않는다. 관찰 runtime과 native owner는 S111에서 추적하며, 기준 자료 획득과 benchmark 적용에는 별도 증거가 필요하다.
+
 터미널 사이드카(`@soksak/sidecar-alacritty-core`)는 [영속 서비스](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.ko.md)이 정의한 영속 서비스의 클라이언트 모듈이다. 서비스는 애플리케이션 설정 디렉터리마다 하나의 프로세스로 실행되며 독립 PTY·셸 프로세스·VT 상태·스크롤백·IOSurface 렌더링을 소유한다. 사이드카는 터미널 세션 제어 요청을 받고 영역에 화면 그림을 공급한다.
 
 `sidecar.json` 선언은 서비스의 process display identity를 `soksak://sidecar/alacritty`로 지정한다. Build는 이 선언을 읽어 executable에 embed하며, `displayName`이 없거나 유효하지 않으면 `sidecar.json`을 명시해 build를 실패한다. Service는 host 환경 변수에 의존하지 않는다. Process는 첫 start record를 쓴 뒤 runtime 초기화 전에 embedded 값을 LaunchServices에 등록한다. 등록 실패는 standard error에 보고하고 서비스 시작을 막는다. Executable path와 basename은 `build/sok-alacritty`, `sok-alacritty`로 유지한다.

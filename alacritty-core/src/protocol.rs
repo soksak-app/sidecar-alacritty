@@ -1310,6 +1310,9 @@ enum SurfaceCommand {
         policy: CursorPolicy,
     },
     ScreenRead,
+    ScreenObserve {
+        request_id: u64,
+    },
     /// Closes the session, answers its result as `result`, and then ends the action.
     SessionClose {
         result: tokio::sync::oneshot::Sender<Result<(), String>>,
@@ -2151,6 +2154,30 @@ async fn present_screen(
     log: &Events,
     input_sequence: u64,
 ) -> bool {
+    present_screen_observation(
+        surface_id,
+        screen,
+        state,
+        output_tx,
+        reason,
+        log,
+        input_sequence,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn present_screen_observation(
+    surface_id: &str,
+    screen: Screen,
+    state: &mut ImageState,
+    output_tx: &OutputSink,
+    reason: &str,
+    log: &Events,
+    input_sequence: u64,
+    observation: Option<u64>,
+) -> bool {
     // The host answers consumed after it copies the raster of a display request. If the same raster
     // is drawn again before the answer arrives, the pixels being copied are overwritten and a frame
     // with missing glyphs is shown. The screen in the meantime stays dirty and is drawn after the
@@ -2160,7 +2187,7 @@ async fn present_screen(
         return true;
     }
     let draw_started = std::time::Instant::now();
-    let collect_render = collect_render_metadata(log.trace_dir());
+    let collect_render = collect_render_metadata(log.trace_dir()) || observation.is_some();
     let draw = crate::platform::darwin::frame::render_layout(&screen).and_then(|layout| {
         state
             .frame
@@ -2181,6 +2208,16 @@ async fn present_screen(
             // next frame, and the next change draws that frame. Clearing it would name the last
             // sent frame, which shows an earlier screen.
             state.dirty = true;
+            if let Some(request_id) = observation {
+                return observation_error(
+                    surface_id,
+                    output_tx,
+                    request_id,
+                    "observationFailed",
+                    &reason,
+                )
+                .await;
+            }
             let response = json!({
                 "surface": surface_id,
                 "body": {"event": "error", "reason": reason}
@@ -2273,6 +2310,76 @@ async fn present_screen(
         if output_tx.send(event).await.is_err() {
             return false;
         }
+    }
+    if let Some(request_id) = observation {
+        let cells = match crate::screen_hash::message_cells(&screen) {
+            Ok(cells) => cells,
+            Err(reason) => {
+                return observation_error(
+                    surface_id,
+                    output_tx,
+                    request_id,
+                    "observationFailed",
+                    &reason,
+                )
+                .await;
+            }
+        };
+        let Some(render) = state.render.as_ref() else {
+            return observation_error(
+                surface_id,
+                output_tx,
+                request_id,
+                "observationFailed",
+                "actual draw returned no renderer metadata",
+            )
+            .await;
+        };
+        let mut cursor = json!(screen.cursor);
+        cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
+        let response = json!({"surface":surface_id,"body":{
+            "event":"screen.observed", "requestId":request_id,
+            "frame":render["frame"], "render":render,
+            "rows":screen.rows, "cols":screen.cols, "cells":cells,
+            "cursor":cursor, "background":screen.background, "scrollback":screen.scrollback
+        }});
+        if output_tx.reply(response).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+struct PendingObservation {
+    request_id: u64,
+    output: OutputSink,
+}
+
+async fn observation_error(
+    surface_id: &str,
+    output: &OutputSink,
+    request_id: u64,
+    error: &str,
+    reason: &str,
+) -> bool {
+    output.reply(json!({"surface":surface_id,"body":{"requestId":request_id,"error":error,"reason":reason}})).await.is_ok()
+}
+
+async fn cancel_observation(
+    surface_id: &str,
+    pending: &mut Option<PendingObservation>,
+    error: &str,
+    reason: &str,
+) -> bool {
+    if let Some(observation) = pending.take() {
+        return observation_error(
+            surface_id,
+            &observation.output,
+            observation.request_id,
+            error,
+            reason,
+        )
+        .await;
     }
     true
 }
@@ -3676,6 +3783,7 @@ async fn surface_task(
     let mut session_id: Option<String> = None;
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
+    let mut pending_observation: Option<PendingObservation> = None;
     let mut preserved_inline_images = Vec::new();
     let mut multipart: Option<MultipartAssembly> = None;
     // The wheel modes of the last `sidecar.alacritty.mouse_modes` record of this surface.
@@ -3747,6 +3855,16 @@ async fn surface_task(
                 .as_ref()
                 .is_none_or(|state| !state.dirty || !state.drawing)
         {
+            if !cancel_observation(
+                &surface_id,
+                &mut pending_observation,
+                "observationClosed",
+                "terminal process exited",
+            )
+            .await
+            {
+                return;
+            }
             if output_tx
                 .send(json!({"surface": surface_id, "body": {"event": "exit"}}).to_string())
                 .await
@@ -3879,6 +3997,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Reconnect => {
+                        if !cancel_observation(&surface_id, &mut pending_observation, "observationClosed", "image owner reconnected").await { return; }
                         // The host sends the drawing state of the region again to a new connection.
                         hidden_image = None;
                         // PTY and VT state belong to the persistent session, and the IOSurface
@@ -4049,6 +4168,7 @@ async fn surface_task(
                                     current_generation,
                                 )
                             } else {
+                                if !cancel_observation(&surface_id, &mut pending_observation, "observationUnavailable", "image region detached").await { return; }
                                 if let Some(state) = image_state.take() {
                                     preserved_inline_images
                                         .extend(release_image_state(&surface_id, state));
@@ -4104,6 +4224,7 @@ async fn surface_task(
                             continue;
                         }
                         state.drawing = next;
+                        if !next && !cancel_observation(&surface_id, &mut pending_observation, "observationUnavailable", "image region stopped drawing").await { return; }
                         // The region draws again: the screen that changed while it did not is drawn
                         // and sent once. A frame in flight draws it after its answer.
                         if next && state.dirty && !state.pending_draw && session_id.is_some() {
@@ -4715,6 +4836,21 @@ async fn surface_task(
                             if output_tx.send(response.to_string()).await.is_err() { return; }
                         }
                     }
+                    SurfaceCommand::ScreenObserve { request_id } => {
+                        if !cfg!(feature = "diagnostics") || session_id.is_none() || image_state.as_ref().is_none_or(|state| !state.drawing) {
+                            if !observation_error(&surface_id, &output_tx, request_id, "observationUnavailable", "screen.observe requires a diagnostic image region that is drawing").await { return; }
+                        } else if pending_observation.is_some() {
+                            if !observation_error(&surface_id, &output_tx, request_id, "observationBusy", "another screen observation is pending").await { return; }
+                        } else {
+                            let state = image_state.as_mut().unwrap();
+                            if state.pending_draw {
+                                pending_observation = Some(PendingObservation { request_id, output: output_tx.clone() });
+                            } else {
+                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                if !present_screen_observation(&surface_id, screen, state, &output_tx, "observe", &log, inputs.sequence, Some(request_id)).await { return; }
+                            }
+                        }
+                    }
                     SurfaceCommand::ScreenRead => {
                         // The reply of a screen read is the full form, from which the page continues.
                         screens.forget();
@@ -4754,6 +4890,7 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::SessionClose { result } => {
+                        if !cancel_observation(&surface_id, &mut pending_observation, "observationClosed", "terminal session closed").await { return; }
                         // The image must be released before the close reply, so that the display
                         // reply that the host sends after receiving the close reply finds that
                         // transfer image.
@@ -4777,6 +4914,7 @@ async fn surface_task(
                         break;
                     }
                     SurfaceCommand::ConnectionEnded => {
+                        if !cancel_observation(&surface_id, &mut pending_observation, "observationClosed", "terminal connection ended").await { return; }
                         if let Some(ref sid) = session_id
                             && let Err(error) = session_port.close(sid).await {
                                 let response = json!({
@@ -4877,6 +5015,15 @@ async fn surface_task(
                                     continue;
                                 }
                                 state.leases.push((state.sequence, state.sent_surface));
+                            }
+                            if pending_observation.is_some() {
+                                if is_error || pending_configuration.is_some() || !state.drawing {
+                                    if !cancel_observation(&surface_id, &mut pending_observation, "observationUnavailable", "image ownership or drawing state changed before observation").await { return; }
+                                } else {
+                                    let observation = pending_observation.take().unwrap();
+                                    let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
+                                    if !present_screen_observation(&surface_id, screen, state, &observation.output, "observe", &log, inputs.sequence, Some(observation.request_id)).await { return; }
+                                }
                             }
                             if let Some(configuration) = pending_configuration.take() {
                                 let new_state = match ImageState::new(&configuration, &terminal_font, terminal_font_size, collect_render_metadata(log.trace_dir())) {
@@ -5966,6 +6113,29 @@ where
                                     .is_err()
                                 {
                                     break;
+                                }
+                            }
+                            "screen.observe" => {
+                                match body
+                                    .get("requestId")
+                                    .and_then(Value::as_u64)
+                                    .filter(|id| *id > 0 && *id <= 9_007_199_254_740_991)
+                                {
+                                    Some(request_id) => {
+                                        if tx
+                                            .send(SurfaceCommand::ScreenObserve { request_id })
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        let response = json!({"surface":surface_id,"body":{"error":"invalidParams","requestId":body.get("requestId"),"reason":"screen.observe requires a positive safe integer requestId"}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                             "screen.read" => {
