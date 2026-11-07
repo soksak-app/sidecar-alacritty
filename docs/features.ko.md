@@ -1,7 +1,7 @@
 # Features
 
-- [~] S112 — P0, core F584-5와 연결: PTY engine 출력은 raster 가시성·대기 copy 소유권과 무관하게 semantic screen watcher에 알려야 한다. screen.watch가 연결별 수요를 등록하고 screen.changed는 frame을 주장하지 않고 engine.feed 뒤에 오며 unwatch·재연결이 등록을 끝낸다. watcher가 없으면 event를 만들지 않는다. ROOT가 실제 actor owner의 unknown-operation RED를 확인했다. 남은 것: 같은 owner GREEN, 인접 lifecycle·기본 경로 검증, 실제 staged acceptance와 source commit.
-  검증: 같은 actor owner를 포함한 serve_contract 전체 133개가 ROOT의 strict link 검사 아래 통과했다(실패·skip 0, f5845-screen-watch-alacritty-contract-green.log). plugin 소비자와 실제 앱 검증은 남아 있다.
+- [o] S112 — P0, core F584-5와 연결: PTY engine 출력은 raster 가시성·대기 copy 소유권과 무관하게 semantic screen watcher에 알려야 한다. screen.watch가 연결별 수요를 등록하고 screen.changed는 frame을 주장하지 않고 engine.feed 뒤에 오며 unwatch·재연결이 등록을 끝낸다. watcher가 없으면 event를 만들지 않는다. ROOT가 실제 actor owner의 unknown-operation RED를 확인했다. 실제 세 host 각각의 terminal·term hidden 화면 변경 알림 여섯 경우와 부모 검사가 모두 통과했다(7 pass, 0 fail, 0 skip; screen-watch-hidden-six-fixed-shell.log). 모든 target은 숨겨져 그리지 않았으며 입력 뒤 추가 screen.read·polling·activation 없이 기존 watch가 정확한 출력을 받았다. 구현·단위·인접 회귀와 실제 staged acceptance를 완료했다.
+  검증: 같은 actor owner를 포함한 serve_contract 전체 133개가 ROOT의 strict link 검사 아래 통과했다(실패·skip 0, f5845-screen-watch-alacritty-contract-green.log). plugin 소비자와 실제 앱 검증도 위 기록대로 통과했다.
 
 [English](features.md)
 
