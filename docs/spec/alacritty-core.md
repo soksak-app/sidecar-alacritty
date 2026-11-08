@@ -2,14 +2,6 @@
 
 [한국어](alacritty-core.ko.md)
 
-## On-demand reference observation (S111)
-
-Diagnostic `screen.observe` takes a positive safe-integer `requestId`. One `screen.observed` response carries that ID and the actual reference draw's `frame`, `render`, full `cells`, `rows`, `cols`, `cursor`, `background` and `scrollback`. It may create a new sequence; it never assigns newly computed metadata to an older tuple. Ordinary `screen.read` replies cannot finish it. A consumer independently verifies the exact presented region and captured pixels after its normal measured interval.
-
-A pending copy remains protected until its matching `consumed`, `leased` or error acknowledgement. A lease holds its actual target before an observation may draw; the observation uses another available target, and `released` retains its existing exact ownership checks. A second pending observation is `observationBusy`. Missing diagnostic capability, an unconfigured or non-drawing image is `observationUnavailable`; draw failure is `observationFailed`; natural or explicit close is `observationClosed`; malformed IDs are `invalidParams`. Held observations retain their original response sink and terminate explicitly on ownership changes.
-
-One requested metadata draw uses the existing strip renderer's glyph draw, keyed-row store, overlays, cursor composition and target selection. It may redraw rows to collect complete metadata but must preserve pixels, later scroll reuse, ordinary metadata policy and held surfaces. It does not switch renderers, enable startup tracing or depend on another repository's files. The observation runtime and native owners are tracked in S111; reference acquisition and benchmark adoption require their own evidence.
-
 The terminal sidecar (`@soksak/sidecar-alacritty-core`) is the client module for the persistent terminal service defined by [persistent services](https://github.com/soksak-app/core/blob/main/docs/spec/persistent-services.md). The service is one process per application configuration directory and owns the independent PTYs, shell processes, VT state, scrollback, and IOSurface-backed rendering. The sidecar accepts requests to control a terminal session and supplies screen images to a region.
 
 The `sidecar.json` declaration gives the service the process display identity `soksak://sidecar/alacritty`. The build reads and embeds that declaration in the executable; a missing or invalid `displayName` fails the build and names `sidecar.json`. The service does not depend on a host environment variable. The process writes its first start record, then registers the embedded value with LaunchServices before runtime initialization. Registration failure is reported on standard error and prevents the service from starting. The executable path and basename remain `build/sok-alacritty` and `sok-alacritty`.

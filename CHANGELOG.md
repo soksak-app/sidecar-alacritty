@@ -1,5 +1,6 @@
 # Changelog
 
+- S113: The one-shot `screen.observe` request, its `screen.observed` reply and its errors are removed, and the strip renderer again collects no render metadata; `screen.read`, `screen.watch`, leased image targets, the content-keyed strip store and the frame identity stay.
 - S110: The memory test of the frame bounds the second 200 draws by the bytes in use of the malloc zones, and what a draw keeps outside malloc by the slope of the footprint over 1000 draws instead of its growth over 200, which moves by whole pages as the allocator keeps or returns free pages.
 - S109: make puts the bin folder of CARGO_HOME, `~/.cargo` when CARGO_HOME is unset, on PATH, so it finds the cargo that rustup installs on a GitHub runner.
 - S108: The Makefile puts `~/.cargo/bin` on PATH and runs the cargo that it resolves there once, so make finds the cargo of rustup without the shell profile, also on a recipe line that GNU Make 3.81 runs without a shell.
