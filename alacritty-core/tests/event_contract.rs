@@ -11,8 +11,6 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const DEADLINE: Duration = Duration::from_secs(10);
-
 /// The sidecar prefix of the event names of the contract fixtures, and the prefix of the events of this writer.
 const FIXTURE_PREFIX: &str = "\"sidecar.vt.";
 const PREFIX: &str = "\"sidecar.alacritty.";
@@ -183,7 +181,7 @@ fn the_levels_of_the_debug_channel_go_to_the_debug_file_with_one_seq_across_both
     assert!(log.emit(Level::Debug, "sidecar.alacritty.test", &json!({"index": 2})));
     assert!(log.emit(Level::Trace, "sidecar.alacritty.test", &json!({"index": 3})));
     assert!(log.emit(Level::Warn, "sidecar.alacritty.test", &json!({"index": 4})));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let main = lines_of(log.path());
     let debug_path = dir.join("alacritty-b1.debug.jsonl");
     let debug = lines_of(&debug_path);
@@ -225,7 +223,7 @@ fn the_levels_of_the_debug_channel_go_to_the_debug_file_with_one_seq_across_both
 fn the_first_line_opens_the_file_with_the_schema_the_pid_the_role_and_the_boot() {
     let dir = directory("open");
     let log = EventLog::start(options(&dir)).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let lines = lines_of(log.path());
     assert_eq!(log.path(), dir.join("alacritty-b1.jsonl"));
     let golden = &fixture_lines("key.jsonl")[0];
@@ -259,7 +257,7 @@ fn the_folder_is_private_and_the_file_is_private() {
     use std::os::unix::fs::PermissionsExt;
     let dir = directory("modes");
     let log = EventLog::start(options(&dir)).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let folder = std::fs::metadata(&*dir).unwrap().permissions().mode() & 0o777;
     let file = std::fs::metadata(log.path()).unwrap().permissions().mode() & 0o777;
     assert_eq!((folder, file), (0o700, 0o600));
@@ -289,7 +287,7 @@ fn an_event_has_the_structure_of_the_golden_line_of_the_sidecar() {
         },
         &golden["fields"],
     ));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let line = lines_of(log.path())
         .into_iter()
         .find(|line| line["event"] == golden["event"])
@@ -330,7 +328,7 @@ fn seq_is_consecutive_from_one_and_ts_us_is_in_microseconds() {
             &json!({ "index": index })
         ));
     }
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     // The four events are of the debug channel, so the test reads both files in the order of their seq.
     let lines = soksak_sidecar_alacritty_core::events::read_run_lines(log.path()).unwrap();
     let seqs: Vec<u64> = lines
@@ -364,7 +362,7 @@ fn a_refused_event_is_counted_and_the_gap_of_seq_is_explained_by_log_dropped() {
         "sidecar.alacritty.test",
         &json!({"text": "x".repeat(500)})
     ));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let lines = lines_of(log.path());
     let dropped = lines
         .iter()
@@ -409,7 +407,7 @@ fn an_event_outside_the_namespace_of_the_service_is_refused() {
     let dir = directory("namespace");
     let log = EventLog::start(options(&dir)).unwrap();
     assert!(!log.emit(Level::Info, "host.window.event", &json!({})));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let lines = lines_of(log.path());
     assert!(
         lines
@@ -449,7 +447,7 @@ fn a_full_file_rotates_and_the_next_file_continues_seq() {
             "sidecar.alacritty.test",
             &json!({ "index": index, "text": "y".repeat(60) })
         ));
-        log.flush(DEADLINE).unwrap();
+        log.flush().unwrap();
     }
     let current = lines_of(log.path());
     assert_eq!(current[0]["event"], "log.open");
@@ -484,7 +482,7 @@ fn a_record_is_an_event_with_the_place_and_the_text() {
     let log = EventLog::start(options(&dir)).unwrap();
     log.record_error("surface close", "first\nsecond");
     log.record_info("font", "no listed font is installed");
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let lines = lines_of(log.path());
     let error = &lines[3];
     assert_eq!(error["event"], "sidecar.alacritty.record.error");
@@ -521,7 +519,7 @@ fn a_reader_rejects_a_file_of_another_schema_and_names_the_file() {
     assert!(error.contains("log.open"), "{error}");
     // The file of this writer is read.
     let log = EventLog::start(options(&dir.join("current"))).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     assert_eq!(read_lines(log.path()).unwrap()[0]["fields"]["schema"], 3);
 }
 
@@ -543,7 +541,7 @@ fn fields_over_the_bound_of_an_event_are_stored_cut_and_marked_truncated() {
         "sidecar.alacritty.test",
         &json!({ "text": "small" })
     ));
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let lines = lines_of(log.path());
     // The writer events before the test events vary in number, so the test events are found by their name.
     let stored: Vec<&Value> = lines
@@ -593,7 +591,7 @@ fn continuous_events_do_not_postpone_the_batch_deadline() {
     let interval = Duration::from_millis(100);
     configured.batch_interval = interval;
     let log = EventLog::start(configured).unwrap();
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let (_pace, pacing) = std::sync::mpsc::channel::<()>();
     let mut previous = Instant::now();
     let began = previous;
@@ -635,7 +633,7 @@ fn continuous_events_do_not_postpone_the_batch_deadline() {
         "continuous input: elapsed {elapsed:?}, longest gap {longest:?}, stored {stored}, tail bytes {}",
         bytes.len() - committed
     );
-    log.flush(DEADLINE).unwrap();
+    log.flush().unwrap();
     let complete = lines_of(log.path());
     let indices: Vec<u64> = complete
         .iter()
