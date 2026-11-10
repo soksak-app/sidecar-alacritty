@@ -8304,9 +8304,13 @@ async fn a_frame_sends_its_view_when_a_theme_changes_the_default_background() {
 }
 
 // A program that sets the default background with OSC 11 changes the color of the margin, the
-// scrollbar track and the padding, so the next frame sends its view with that color.
+// scrollbar track and the padding, so the frame that shows that output sends its view with that
+// color. The test ends on events, not on a time: each answer of a screen read tells whether the
+// engine has applied the output and names the frame that shows it, and that frame's view follows
+// its image envelope.
 #[tokio::test]
 async fn a_frame_sends_its_view_when_osc_11_changes_the_default_background() {
+    const READ: &[u8] = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n";
     let calls = Arc::new(Mutex::new(Calls::default()));
     let port = Arc::new(FakeSessionPort::new("osc11".to_string(), calls.clone()));
     port.echo_input();
@@ -8323,39 +8327,74 @@ async fn a_frame_sends_its_view_when_osc_11_changes_the_default_background() {
         session_port_factory,
     ));
     let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mut seen: Vec<serde_json::Value> = Vec::new();
+    // Every image is answered as the host does, so the next frame can draw.
+    async fn next(
+        lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+        to_serve: &mut tokio::io::DuplexStream,
+        seen: &mut Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        let line = lines
+            .next_line()
+            .await
+            .expect("failed to read a sidecar line")
+            .unwrap_or_else(|| panic!("the sidecar closed its output: {seen:#?}"));
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if value["body"]["image"].is_object() {
+            acknowledge_image(to_serve, &value).await;
+        }
+        seen.push(value.clone());
+        value
+    }
     to_serve
         .write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
 "#)
         .await
         .unwrap();
-    let first = next_image_envelope(&mut lines).await;
-    acknowledge_image(&mut to_serve, &first).await;
+    while !next(&mut lines, &mut to_serve, &mut seen).await["body"]["image"].is_object() {}
     to_serve
         .write_all(br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\u001b]11;#102030\u0007","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
 "#)
         .await
         .unwrap();
-    let mut seen = Vec::new();
-    let view = loop {
-        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
-            .await
-            .unwrap_or_else(|_| panic!("no view with the OSC 11 background arrived: {seen:#?}"))
-            .unwrap()
-            .expect("the sidecar closed its output");
-        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
-        if value["body"]["event"] == "view" && value["body"]["background"] == "#102030" {
-            break value;
+    // Each answer that does not show the color yet asks again: the echo of the input reaches the
+    // engine on another channel than the read.
+    to_serve.write_all(READ).await.unwrap();
+    let shown = loop {
+        let value = next(&mut lines, &mut to_serve, &mut seen).await;
+        if value["body"]["event"] != "screen" {
+            continue;
         }
-        if value["body"]["image"].is_object() {
-            acknowledge_image(&mut to_serve, &value).await;
+        if value["body"]["background"] == "#102030" {
+            break value["body"]["frame"]["sequence"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("the answer names the frame that shows it: {value}"));
         }
-        seen.push(value);
+        to_serve.write_all(READ).await.unwrap();
     };
-    assert!(
-        view["body"]["frame"]["sequence"].as_u64().unwrap() > 1,
-        "the view of a frame after the output carries the color: {view}"
-    );
+    // The view of that frame follows its image envelope; it may have arrived before the answer.
+    let is_view_of_shown = |value: &serde_json::Value| {
+        value["body"]["event"] == "view" && value["body"]["frame"]["sequence"] == shown
+    };
+    if !seen.iter().any(is_view_of_shown) {
+        while next(&mut lines, &mut to_serve, &mut seen).await["body"]["image"]["sequence"] != shown
+        {
+        }
+        loop {
+            let value = next(&mut lines, &mut to_serve, &mut seen).await;
+            if value["body"]["event"] == "view" || value["body"]["image"].is_object() {
+                break;
+            }
+        }
+    }
+    let view = seen
+        .iter()
+        .find(|value| is_view_of_shown(value))
+        .unwrap_or_else(|| {
+            panic!("the frame {shown} that shows the output sent no view: {seen:#?}")
+        });
+    assert_eq!(view["body"]["background"], "#102030", "{view}");
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
