@@ -1,5 +1,7 @@
 # Changelog
 
+- S115: 뷰의 위나 아래 가장자리를 넘는 텍스트 선택 드래그가 기록을 스크롤한다. `selection.update`가 `overflow`를 받고, 0이 아닌 overflow는 선택을 넓히기 전에 주 뷰포트를 보존된 기록 안에서 `ceil(|overflow| / cell height)`행 옮긴다. 바뀌지 않은 갱신과 보고되는 마우스 제스처는 아무것도 옮기지 않는다. Red: drag test가 뷰포트 이동 없이 실패했다. Green: 통과한다.
+- S114: `view` 이벤트가 그 frame의 기본 배경인 `background`를 담고, 기본 배경이 바뀐 frame은 `view` 이벤트를 보낸다. Red: 테마와 OSC 11 view test가 실패했다. Green: 통과한다.
 - S113: one-shot `screen.observe` 요청과 `screen.observed` 응답, 그 오류를 제거하고 strip renderer는 다시 render metadata를 수집하지 않는다. `screen.read`·`screen.watch`·leased image target·content-keyed strip 저장소·frame identity는 유지한다.
 - S110: frame의 memory test가 두 번째 200번 draw를 malloc zone의 사용 중 bytes로 제한하고, draw가 malloc 밖에 남기는 것은 200번 동안의 footprint 증가 대신 1000번에 걸친 footprint 기울기로 제한한다. footprint는 할당기가 빈 page를 붙잡거나 돌려줄 때 page 단위로 움직인다.
 - S109: make가 CARGO_HOME의 bin 폴더(CARGO_HOME이 없으면 `~/.cargo`)를 PATH에 넣으므로 GitHub runner에서 rustup이 설치한 cargo를 찾는다.

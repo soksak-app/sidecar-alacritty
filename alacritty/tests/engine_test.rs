@@ -846,6 +846,39 @@ fn the_viewport_scrolls_through_the_scrollback_and_returns_to_the_newest_output(
     assert!(engine.screen().cursor.visible);
 }
 
+/// A selection drag past the top edge of the view moves the viewport, limited to the retained
+/// history, and then extends the selection to the top row of the moved viewport
+/// (docs/spec/alacritty-core.md): the start stays on its line, so the selection covers the lines
+/// between the oldest retained line and the start.
+#[test]
+fn a_selection_extended_past_the_oldest_retained_line_starts_at_that_line() {
+    let mut engine = AlacrittyEngine::new();
+    for index in 0..60 {
+        engine.feed(format!("LINE{index:02}\r\n").as_bytes());
+    }
+    let (_, history) = engine.scrollback();
+    // The start is the left edge of the first visible line of the newest output.
+    let first = line_text(&engine.screen(), 0);
+    engine.selection_start(0, 0).expect("selection start");
+    engine.scroll_viewport(1000);
+    assert_eq!(
+        engine.scrollback(),
+        (history, history),
+        "the drag stops at the oldest retained line"
+    );
+    engine.selection_update(0, 0).expect("selection update");
+    let text = engine
+        .selection_end()
+        .expect("selection copy")
+        .expect("the selection holds text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.first(), Some(&"LINE00"), "{text}");
+    assert_eq!(lines.len(), history, "the lines above the start: {text}");
+    let last = format!("LINE{:02}", history - 1);
+    assert_eq!(lines.last(), Some(&last.as_str()), "{text}");
+    assert_eq!(first, format!("LINE{history:02}"));
+}
+
 /// Glyph of a cell drawn with the selection background (the default theme's selection color).
 fn inverted_text(screen: &soksak_sidecar_alacritty_core::Screen, row: usize) -> String {
     let selection = format!(

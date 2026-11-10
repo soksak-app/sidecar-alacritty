@@ -84,6 +84,10 @@ struct MockEngine {
     viewport: Arc<Mutex<Vec<String>>>,
     cursor_at_end: bool,
     join_feed_chunks: bool,
+    /// The default background of the screen. With `follows_default_background` it is the theme
+    /// background or the color of an OSC 11 output, as the engine reports it.
+    background: String,
+    follows_default_background: bool,
 }
 
 impl MockEngine {
@@ -100,6 +104,8 @@ impl MockEngine {
             viewport: Arc::new(Mutex::new(Vec::new())),
             cursor_at_end: false,
             join_feed_chunks: false,
+            background: "#1e1e1e".to_string(),
+            follows_default_background: false,
         }
     }
 
@@ -116,6 +122,8 @@ impl MockEngine {
             viewport: Arc::new(Mutex::new(Vec::new())),
             cursor_at_end: false,
             join_feed_chunks: false,
+            background: "#1e1e1e".to_string(),
+            follows_default_background: false,
         }
     }
 
@@ -128,10 +136,20 @@ impl MockEngine {
         self.join_feed_chunks = true;
         self
     }
+
+    /// The screen reports the theme background, and after an OSC 11 output its color.
+    fn with_default_background(mut self) -> Self {
+        self.follows_default_background = true;
+        self
+    }
 }
 
 impl Engine for MockEngine {
     fn set_theme(&mut self, theme: TerminalTheme) {
+        if self.follows_default_background {
+            let [r, g, b] = theme.background;
+            self.background = format!("#{r:02x}{g:02x}{b:02x}");
+        }
         self.themes.push(theme);
     }
 
@@ -149,6 +167,14 @@ impl Engine for MockEngine {
 
     fn feed(&mut self, bytes: &[u8]) {
         self.feed_history.push(bytes.to_vec());
+        if self.follows_default_background
+            && let Some(color) = std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|text| text.strip_prefix("\x1b]11;"))
+                .and_then(|text| text.strip_suffix('\x07'))
+        {
+            self.background = color.to_string();
+        }
         if bytes == b"\x1b]1337;File=name=ZmlsZS5wbmc=;size=71;inline=1;width=2px:iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=\x07" {
             self.pending_events.push(EngineEvent::InlineImage {
                 anchor: Default::default(),
@@ -321,7 +347,7 @@ impl Engine for MockEngine {
                 preedit: None,
             },
             scrollback: Default::default(),
-            background: "#1e1e1e".to_string(),
+            background: self.background.clone(),
             lines,
         }
     }
@@ -8219,4 +8245,342 @@ async fn an_undecodable_inline_image_is_rejected_and_the_frame_still_draws() {
         "the frame after the rejection did not draw: {seen:#?}"
     );
     task.abort();
+}
+
+/// The `view` events of the output of a served session, in order.
+fn view_events(output: &str) -> Vec<serde_json::Value> {
+    output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["body"]["event"] == "view")
+        .map(|value| value["body"].clone())
+        .collect()
+}
+
+// The page paints the scrollbar track and the padding strips with the `background` of the `view`
+// event (docs/spec/alacritty-core.md), so a frame whose default background changes sends its view
+// even when the grid, the cursor and the scrollback stay.
+#[tokio::test]
+async fn a_frame_sends_its_view_when_a_theme_changes_the_default_background() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let factory_calls = calls.clone();
+    let factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "view".to_string(),
+            factory_calls.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+    let input = r##"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":1}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"light","background":"#e8f5ee","foreground":"#12684a","cursor":"#12684a","selection":"#d8dbe4"}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":2}}}}
+{"surface":"s1","body":{"operation":"theme","mode":"dark","background":"#101418","foreground":"#e8f5ee","cursor":"#e8f5ee","selection":"#2a3038"}}
+{"surface":"s1","body":{"image":{"leased":{"name":"view","generation":1,"raster":1,"sequence":3}}}}
+"##;
+    let reader = std::io::Cursor::new(input.as_bytes());
+    let mut writer = Vec::new();
+    let engine_factory =
+        Arc::new(|| Box::new(MockEngine::new().with_default_background()) as Box<dyn Engine>);
+    serve(engine_factory, reader, &mut writer, factory)
+        .await
+        .unwrap();
+    let output = String::from_utf8(writer).unwrap();
+    let views = view_events(&output);
+    let sequences: Vec<&serde_json::Value> = views
+        .iter()
+        .map(|view| &view["frame"]["sequence"])
+        .collect();
+    assert_eq!(
+        sequences,
+        vec![1, 2, 3],
+        "each theme frame changes the default background and sends its view: {output}"
+    );
+    let backgrounds: Vec<&serde_json::Value> =
+        views.iter().map(|view| &view["background"]).collect();
+    assert!(backgrounds[0].is_string(), "{output}");
+    assert_eq!(backgrounds[1], "#e8f5ee", "{output}");
+    assert_eq!(backgrounds[2], "#101418", "{output}");
+}
+
+// A program that sets the default background with OSC 11 changes the color of the margin, the
+// scrollbar track and the padding, so the frame that shows that output sends its view with that
+// color. The test ends on events, not on a time: each answer of a screen read tells whether the
+// engine has applied the output and names the frame that shows it, and that frame's view follows
+// its image envelope.
+#[tokio::test]
+async fn a_frame_sends_its_view_when_osc_11_changes_the_default_background() {
+    const READ: &[u8] = b"{\"surface\":\"s1\",\"body\":{\"operation\":\"screen.read\"}}\n";
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let port = Arc::new(FakeSessionPort::new("osc11".to_string(), calls.clone()));
+    port.echo_input();
+    let session_port = port.clone();
+    let session_port_factory = Arc::new(move || session_port.clone() as Arc<dyn SessionPort>);
+    let engine_factory =
+        Arc::new(|| Box::new(MockEngine::new().with_default_background()) as Box<dyn Engine>);
+    let (mut to_serve, serve_in) = tokio::io::duplex(1 << 20);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let task = tokio::spawn(serve(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+    ));
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mut seen: Vec<serde_json::Value> = Vec::new();
+    // Every image is answered as the host does, so the next frame can draw.
+    async fn next(
+        lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+        to_serve: &mut tokio::io::DuplexStream,
+        seen: &mut Vec<serde_json::Value>,
+    ) -> serde_json::Value {
+        let line = lines
+            .next_line()
+            .await
+            .expect("failed to read a sidecar line")
+            .unwrap_or_else(|| panic!("the sidecar closed its output: {seen:#?}"));
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if value["body"]["image"].is_object() {
+            acknowledge_image(to_serve, &value).await;
+        }
+        seen.push(value.clone());
+        value
+    }
+    to_serve
+        .write_all(br#"{"surface":"s1","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+"#)
+        .await
+        .unwrap();
+    while !next(&mut lines, &mut to_serve, &mut seen).await["body"]["image"].is_object() {}
+    to_serve
+        .write_all(br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"insert","text":"\u001b]11;#102030\u0007","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#)
+        .await
+        .unwrap();
+    // Each answer that does not show the color yet asks again: the echo of the input reaches the
+    // engine on another channel than the read.
+    to_serve.write_all(READ).await.unwrap();
+    let shown = loop {
+        let value = next(&mut lines, &mut to_serve, &mut seen).await;
+        if value["body"]["event"] != "screen" {
+            continue;
+        }
+        if value["body"]["background"] == "#102030" {
+            break value["body"]["frame"]["sequence"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("the answer names the frame that shows it: {value}"));
+        }
+        to_serve.write_all(READ).await.unwrap();
+    };
+    // The view of that frame follows its image envelope; it may have arrived before the answer.
+    let is_view_of_shown = |value: &serde_json::Value| {
+        value["body"]["event"] == "view" && value["body"]["frame"]["sequence"] == shown
+    };
+    if !seen.iter().any(is_view_of_shown) {
+        while next(&mut lines, &mut to_serve, &mut seen).await["body"]["image"]["sequence"] != shown
+        {
+        }
+        loop {
+            let value = next(&mut lines, &mut to_serve, &mut seen).await;
+            if value["body"]["event"] == "view" || value["body"]["image"].is_object() {
+                break;
+            }
+        }
+    }
+    let view = seen
+        .iter()
+        .find(|value| is_view_of_shown(value))
+        .unwrap_or_else(|| {
+            panic!("the frame {shown} that shows the output sent no view: {seen:#?}")
+        });
+    assert_eq!(view["body"]["background"], "#102030", "{view}");
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+/// Serves a selection gesture with the mock engine and returns the output, the viewport moves and
+/// the selection edges that the engine received.
+async fn serve_selection_drag(
+    modes: Option<Modes>,
+    requests: &str,
+) -> (String, Vec<String>, Vec<(u16, u16)>) {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = format!(
+        "{}\n{}\n{}",
+        r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}"#,
+        r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+        requests
+    );
+    let reader = std::io::Cursor::new(input.into_bytes());
+    let mut writer = Vec::new();
+    let viewport = Arc::new(Mutex::new(Vec::new()));
+    let cells = Arc::new(Mutex::new(Vec::new()));
+    let engine_viewport = viewport.clone();
+    let engine_cells = cells.clone();
+    let engine_factory = Arc::new(move || {
+        let mut engine = match modes.clone() {
+            Some(modes) => MockEngine::with_modes(modes),
+            None => MockEngine::new(),
+        };
+        engine.viewport = engine_viewport.clone();
+        engine.selected_cells = engine_cells.clone();
+        Box::new(engine) as Box<dyn Engine>
+    });
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new("drag".to_string(), port_calls.clone()))
+            as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let viewport = viewport.lock().unwrap().clone();
+    let cells = cells.lock().unwrap().clone();
+    (String::from_utf8(writer).unwrap(), viewport, cells)
+}
+
+/// The cell height in points of the region that serve_selection_drag configures, and its rows.
+fn drag_cell_height_and_rows() -> (f64, u16) {
+    let cell_height = metrics(13.0, 1.0).cell_height;
+    (f64::from(cell_height), (384.0 / cell_height) as u16)
+}
+
+// A selection drag above the top edge of the view scrolls toward older output by the rows that the
+// pointer is above the edge, at least 1, and extends the selection to the top row of the moved
+// viewport (docs/spec/alacritty-core.md).
+#[tokio::test]
+async fn a_selection_drag_above_the_view_scrolls_toward_older_output() {
+    let (cell_height, _) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":{}}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-1.0}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":{}}}}}
+"#,
+        1.5 * cell_height,
+        -2.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    assert_eq!(
+        viewport,
+        vec!["viewport 1".to_string(), "viewport 3".to_string()],
+        "a point 1 point above the edge moves 1 row, one 2.5 rows above it moves 3: {output}"
+    );
+    assert_eq!(
+        cells,
+        vec![(0, 1), (0, 0), (0, 0)],
+        "the selection extends to the top row: {output}"
+    );
+    assert!(!output.contains("invalidParams"), "{output}");
+}
+
+// Below the bottom edge the viewport moves toward newer output, and the selection extends to the
+// bottom row.
+#[tokio::test]
+async fn a_selection_drag_below_the_view_scrolls_toward_newer_output() {
+    let (cell_height, rows) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":1.0}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":383.0,"overflow":0.5}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":383.0,"overflow":{}}}}}
+"#,
+        1.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    assert_eq!(
+        viewport,
+        vec!["viewport -1".to_string(), "viewport -2".to_string()],
+        "{output}"
+    );
+    assert_eq!(
+        cells,
+        vec![(0, 0), (0, rows - 1), (0, rows - 1)],
+        "the selection extends to the bottom row: {output}"
+    );
+}
+
+// The pointer that stays still outside the view scrolls nothing more: an update equal to the
+// previous update of the gesture moves no viewport, and an update inside the view moves none. A
+// movement outside the view after it moves the viewport again.
+#[tokio::test]
+async fn a_selection_drag_that_does_not_move_scrolls_nothing_more() {
+    let requests = r#"{"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":20.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":30.0,"y":40.0,"overflow":0}}
+{"surface":"s1","body":{"operation":"selection.update","x":30.0,"y":40.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":2.0,"y":0.0,"overflow":-5.0}}
+"#;
+    let (output, viewport, cells) = serve_selection_drag(None, requests).await;
+    assert_eq!(
+        viewport,
+        vec![
+            "viewport 1".to_string(),
+            "viewport 1".to_string(),
+            "viewport 1".to_string()
+        ],
+        "only a changed point outside the view scrolls: {output}"
+    );
+    assert_eq!(
+        cells.len(),
+        7,
+        "every update extends the selection: {output}"
+    );
+}
+
+// A present overflow that is not a finite number is refused and changes nothing.
+#[tokio::test]
+async fn a_selection_update_with_an_invalid_overflow_is_refused() {
+    let (cell_height, _) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":{}}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":"up"}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":null}}}}
+"#,
+        1.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    let refusals = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| {
+            value["body"]["error"] == "invalidParams"
+                && value["body"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("overflow"))
+        })
+        .count();
+    assert_eq!(refusals, 2, "{output}");
+    assert!(viewport.is_empty(), "{output}");
+    assert_eq!(cells, vec![(0, 1)], "{output}");
+}
+
+// While mouse reporting owns the gesture, the program receives the drag; the selection operations
+// select nothing and move no viewport.
+#[tokio::test]
+async fn a_reported_mouse_drag_past_the_view_moves_no_viewport() {
+    let requests = r#"{"surface":"s1","body":{"operation":"mouse","inputId":"down","phase":"down","x":1.0,"y":20.0,"pressed":true,"shift":false,"alt":false,"ctrl":false}}
+{"surface":"s1","body":{"operation":"mouse","inputId":"move","phase":"move","x":1.0,"y":0.0,"pressed":true,"shift":false,"alt":false,"ctrl":false}}
+{"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":20.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-40.0}}
+{"surface":"s1","body":{"operation":"selection.end"}}
+{"surface":"s1","body":{"operation":"mouse","inputId":"up","phase":"up","x":1.0,"y":0.0,"pressed":false,"shift":false,"alt":false,"ctrl":false}}
+"#;
+    let (output, viewport, cells) = serve_selection_drag(
+        Some(Modes {
+            mouse_drag: true,
+            sgr_mouse: true,
+            ..Modes::default()
+        }),
+        requests,
+    )
+    .await;
+    assert!(
+        viewport.is_empty(),
+        "a reported gesture moves no viewport: {output}"
+    );
+    assert!(
+        cells.is_empty(),
+        "a reported gesture selects nothing: {output}"
+    );
+    assert!(!output.contains("invalidParams"), "{output}");
 }

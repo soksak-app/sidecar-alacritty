@@ -1350,9 +1350,12 @@ enum SurfaceCommand {
         x: f64,
         y: f64,
     },
+    /// A drag point of a selection. `overflow` is the vertical distance in points from the nearest
+    /// point in the view to the pointer: negative above the view, positive below it, 0 inside.
     SelectionUpdate {
         x: f64,
         y: f64,
+        overflow: f64,
     },
     SelectionEnd,
     /// The user's copy command. It sends the text of the current selection as a copy event.
@@ -2252,20 +2255,21 @@ async fn present_screen(
         }
     });
     // The raster shows the screen, so the page receives no screen for it. The page places the
-    // input method caret and the scrollbar from the cursor and the scrollback of the frame, which
-    // the `view` event sends after the raster when either differs from the last `view` event. The
-    // state events of the inline images that this raster drew are sent after them.
+    // input method caret and the scrollbar from the cursor and the scrollback of the frame, and
+    // paints the scrollbar track and the padding with its default background; the `view` event
+    // sends them after the raster when any of them differs from the last `view` event. The state
+    // events of the inline images that this raster drew are sent after them.
     match output_tx.send_carried(image_envelope.to_string()).await {
         Ok(carrier) => state.carrier = carrier,
         Err(()) => return false,
     }
     let mut cursor = json!(screen.cursor);
     cursor["caret"] = json!({"row": layout.screen.cursor.row, "col": layout.screen.cursor.col});
-    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback});
+    let view = json!({"rows": screen.rows, "cols": screen.cols, "cursor": cursor, "scrollback": screen.scrollback, "background": screen.background});
     if state.view_sent.as_ref() != Some(&view) {
         let event = json!({
             "surface": surface_id,
-            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"]}
+            "body": {"event": "view", "frame": frame, "rows": view["rows"], "cols": view["cols"], "cursor": view["cursor"], "scrollback": view["scrollback"], "background": view["background"]}
         });
         if output_tx.send(event.to_string()).await.is_err() {
             return false;
@@ -3711,6 +3715,9 @@ async fn surface_task(
     // between the TUI and the page selection.
     let mut mouse_gesture_motion = false;
     let mut mouse_cell: Option<(u16, u16)> = None;
+    // The point and overflow of the previous selection update of the gesture. An update that
+    // repeats it is a pointer that did not move, which scrolls nothing more.
+    let mut selection_drag_point: Option<(f64, f64, f64)> = None;
     // A selection release describes the raster that was created just before it. The event is held
     // until that raster is consumed, so the client cannot observe the copy acknowledgement while
     // the previous selection remains on the screen.
@@ -4455,6 +4462,7 @@ async fn surface_task(
                         if output_tx.send(response.to_string()).await.is_err() { return; }
                     }
                     SurfaceCommand::SelectionStart { x, y } => {
+                        selection_drag_point = None;
                         let result = image_state.as_ref().ok_or_else(|| "selection image is not configured".to_string())
                             .and_then(|state| state.selection_edge(x, y))
                             .and_then(|(edge, row)| inputs.selection_start(engine.as_mut(), session_id.as_deref(), edge, row));
@@ -4472,10 +4480,21 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
-                    SurfaceCommand::SelectionUpdate { x, y } => {
+                    SurfaceCommand::SelectionUpdate { x, y, overflow } => {
+                        // A drag past the top or the bottom edge of the view first moves the
+                        // viewport by the rows of its overflow, limited to the retained history,
+                        // and then extends the selection to the edge of the point in the moved
+                        // viewport. An update that repeats the previous one moves nothing.
                         let result = image_state.as_ref().ok_or_else(|| "selection image is not configured".to_string())
-                            .and_then(|state| state.selection_edge(x, y))
-                            .and_then(|(edge, row)| inputs.selection_update(engine.as_mut(), session_id.as_deref(), edge, row));
+                            .and_then(|state| state.selection_edge(x, y).and_then(|cell| state.overflow_rows(overflow).map(|lines| (cell, lines))))
+                            .and_then(|((edge, row), lines)| {
+                                if lines != 0 && selection_drag_point != Some((x, y, overflow)) {
+                                    inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), lines);
+                                    refresh_inline_image_positions(&mut engine, &mut image_state);
+                                }
+                                selection_drag_point = Some((x, y, overflow));
+                                inputs.selection_update(engine.as_mut(), session_id.as_deref(), edge, row)
+                            });
                         if let Err(error) = result {
                             let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": error}});
                             if output_tx.reply(response).await.is_err() { return; }
@@ -5893,12 +5912,29 @@ where
                             "selection.start" | "selection.update" => {
                                 let x = body.get("x").and_then(Value::as_f64);
                                 let y = body.get("y").and_then(Value::as_f64);
-                                match (x, y) {
-                                    (Some(x), Some(y)) if x.is_finite() && y.is_finite() => {
+                                // An absent overflow is 0; a present one must be a finite number.
+                                let overflow = match body.get("overflow") {
+                                    None => Some(0.0),
+                                    Some(value) => value.as_f64().filter(|value| value.is_finite()),
+                                };
+                                match (x, y, overflow) {
+                                    (Some(_), Some(_), None) if operation == "selection.update" => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "selection.update requires a finite overflow"}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    (Some(x), Some(y), overflow)
+                                        if x.is_finite() && y.is_finite() =>
+                                    {
                                         let command = if operation == "selection.start" {
                                             SurfaceCommand::SelectionStart { x, y }
                                         } else {
-                                            SurfaceCommand::SelectionUpdate { x, y }
+                                            SurfaceCommand::SelectionUpdate {
+                                                x,
+                                                y,
+                                                overflow: overflow.unwrap_or(0.0),
+                                            }
                                         };
                                         if tx.send(command).await.is_err() {
                                             break;
