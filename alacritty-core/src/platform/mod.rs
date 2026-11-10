@@ -147,6 +147,23 @@ impl ImageState {
         let edge = ((x / cell_width + 0.5).floor() as u16).min(cols);
         Ok((edge, row))
     }
+
+    /// The rows by which a selection drag moves the viewport for a pointer `overflow` points past
+    /// the view: `ceil(|overflow| / cell height)`, at least 1, positive (toward older output) above
+    /// the view and negative below it, and 0 inside the view.
+    pub fn overflow_rows(&self, overflow: f64) -> Result<i32, String> {
+        if overflow == 0.0 {
+            return Ok(0);
+        }
+        let cell_height = f64::from(self.metrics.cell_height) / f64::from(self.scale);
+        if cell_height <= 0.0 {
+            return Err("selection cell metrics are unavailable".to_string());
+        }
+        let rows = (overflow.abs() / cell_height)
+            .ceil()
+            .clamp(1.0, f64::from(i32::MAX)) as i32;
+        Ok(if overflow < 0.0 { rows } else { -rows })
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -170,6 +187,10 @@ impl ImageState {
     }
 
     pub fn selection_edge(&self, _x: f64, _y: f64) -> Result<(u16, u16), String> {
+        Err("terminal selection is not implemented on this operating system".to_string())
+    }
+
+    pub fn overflow_rows(&self, _overflow: f64) -> Result<i32, String> {
         Err("terminal selection is not implemented on this operating system".to_string())
     }
 }
