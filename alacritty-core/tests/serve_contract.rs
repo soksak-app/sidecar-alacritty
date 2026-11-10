@@ -8359,3 +8359,189 @@ async fn a_frame_sends_its_view_when_osc_11_changes_the_default_background() {
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
+
+/// Serves a selection gesture with the mock engine and returns the output, the viewport moves and
+/// the selection edges that the engine received.
+async fn serve_selection_drag(
+    modes: Option<Modes>,
+    requests: &str,
+) -> (String, Vec<String>, Vec<(u16, u16)>) {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = format!(
+        "{}\n{}\n{}",
+        r#"{"surface":"s1","body":{"operation":"open","shell":"/bin/sh"}}"#,
+        r#"{"surface":"s1","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}"#,
+        requests
+    );
+    let reader = std::io::Cursor::new(input.into_bytes());
+    let mut writer = Vec::new();
+    let viewport = Arc::new(Mutex::new(Vec::new()));
+    let cells = Arc::new(Mutex::new(Vec::new()));
+    let engine_viewport = viewport.clone();
+    let engine_cells = cells.clone();
+    let engine_factory = Arc::new(move || {
+        let mut engine = match modes.clone() {
+            Some(modes) => MockEngine::with_modes(modes),
+            None => MockEngine::new(),
+        };
+        engine.viewport = engine_viewport.clone();
+        engine.selected_cells = engine_cells.clone();
+        Box::new(engine) as Box<dyn Engine>
+    });
+    let port_calls = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new("drag".to_string(), port_calls.clone()))
+            as Arc<dyn SessionPort>
+    });
+    let _ = serve(engine_factory, reader, &mut writer, session_port_factory).await;
+    let viewport = viewport.lock().unwrap().clone();
+    let cells = cells.lock().unwrap().clone();
+    (String::from_utf8(writer).unwrap(), viewport, cells)
+}
+
+/// The cell height in points of the region that serve_selection_drag configures, and its rows.
+fn drag_cell_height_and_rows() -> (f64, u16) {
+    let cell_height = metrics(13.0, 1.0).cell_height;
+    (f64::from(cell_height), (384.0 / cell_height) as u16)
+}
+
+// A selection drag above the top edge of the view scrolls toward older output by the rows that the
+// pointer is above the edge, at least 1, and extends the selection to the top row of the moved
+// viewport (docs/spec/alacritty-core.md).
+#[tokio::test]
+async fn a_selection_drag_above_the_view_scrolls_toward_older_output() {
+    let (cell_height, _) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":{}}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-1.0}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":{}}}}}
+"#,
+        1.5 * cell_height,
+        -2.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    assert_eq!(
+        viewport,
+        vec!["viewport 1".to_string(), "viewport 3".to_string()],
+        "a point 1 point above the edge moves 1 row, one 2.5 rows above it moves 3: {output}"
+    );
+    assert_eq!(
+        cells,
+        vec![(0, 1), (0, 0), (0, 0)],
+        "the selection extends to the top row: {output}"
+    );
+    assert!(!output.contains("invalidParams"), "{output}");
+}
+
+// Below the bottom edge the viewport moves toward newer output, and the selection extends to the
+// bottom row.
+#[tokio::test]
+async fn a_selection_drag_below_the_view_scrolls_toward_newer_output() {
+    let (cell_height, rows) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":1.0}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":383.0,"overflow":0.5}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":383.0,"overflow":{}}}}}
+"#,
+        1.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    assert_eq!(
+        viewport,
+        vec!["viewport -1".to_string(), "viewport -2".to_string()],
+        "{output}"
+    );
+    assert_eq!(
+        cells,
+        vec![(0, 0), (0, rows - 1), (0, rows - 1)],
+        "the selection extends to the bottom row: {output}"
+    );
+}
+
+// The pointer that stays still outside the view scrolls nothing more: an update equal to the
+// previous update of the gesture moves no viewport, and an update inside the view moves none. A
+// movement outside the view after it moves the viewport again.
+#[tokio::test]
+async fn a_selection_drag_that_does_not_move_scrolls_nothing_more() {
+    let requests = r#"{"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":20.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":30.0,"y":40.0,"overflow":0}}
+{"surface":"s1","body":{"operation":"selection.update","x":30.0,"y":40.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-5.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":2.0,"y":0.0,"overflow":-5.0}}
+"#;
+    let (output, viewport, cells) = serve_selection_drag(None, requests).await;
+    assert_eq!(
+        viewport,
+        vec![
+            "viewport 1".to_string(),
+            "viewport 1".to_string(),
+            "viewport 1".to_string()
+        ],
+        "only a changed point outside the view scrolls: {output}"
+    );
+    assert_eq!(
+        cells.len(),
+        7,
+        "every update extends the selection: {output}"
+    );
+}
+
+// A present overflow that is not a finite number is refused and changes nothing.
+#[tokio::test]
+async fn a_selection_update_with_an_invalid_overflow_is_refused() {
+    let (cell_height, _) = drag_cell_height_and_rows();
+    let requests = format!(
+        r#"{{"surface":"s1","body":{{"operation":"selection.start","x":1.0,"y":{}}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":"up"}}}}
+{{"surface":"s1","body":{{"operation":"selection.update","x":1.0,"y":0.0,"overflow":null}}}}
+"#,
+        1.5 * cell_height
+    );
+    let (output, viewport, cells) = serve_selection_drag(None, &requests).await;
+    let refusals = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| {
+            value["body"]["error"] == "invalidParams"
+                && value["body"]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("overflow"))
+        })
+        .count();
+    assert_eq!(refusals, 2, "{output}");
+    assert!(viewport.is_empty(), "{output}");
+    assert_eq!(cells, vec![(0, 1)], "{output}");
+}
+
+// While mouse reporting owns the gesture, the program receives the drag; the selection operations
+// select nothing and move no viewport.
+#[tokio::test]
+async fn a_reported_mouse_drag_past_the_view_moves_no_viewport() {
+    let requests = r#"{"surface":"s1","body":{"operation":"mouse","inputId":"down","phase":"down","x":1.0,"y":20.0,"pressed":true,"shift":false,"alt":false,"ctrl":false}}
+{"surface":"s1","body":{"operation":"mouse","inputId":"move","phase":"move","x":1.0,"y":0.0,"pressed":true,"shift":false,"alt":false,"ctrl":false}}
+{"surface":"s1","body":{"operation":"selection.start","x":1.0,"y":20.0}}
+{"surface":"s1","body":{"operation":"selection.update","x":1.0,"y":0.0,"overflow":-40.0}}
+{"surface":"s1","body":{"operation":"selection.end"}}
+{"surface":"s1","body":{"operation":"mouse","inputId":"up","phase":"up","x":1.0,"y":0.0,"pressed":false,"shift":false,"alt":false,"ctrl":false}}
+"#;
+    let (output, viewport, cells) = serve_selection_drag(
+        Some(Modes {
+            mouse_drag: true,
+            sgr_mouse: true,
+            ..Modes::default()
+        }),
+        requests,
+    )
+    .await;
+    assert!(
+        viewport.is_empty(),
+        "a reported gesture moves no viewport: {output}"
+    );
+    assert!(
+        cells.is_empty(),
+        "a reported gesture selects nothing: {output}"
+    );
+    assert!(!output.contains("invalidParams"), "{output}");
+}
