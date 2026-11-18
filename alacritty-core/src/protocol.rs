@@ -4920,7 +4920,7 @@ async fn surface_task(
                         // the reply is the cells of the named rows, not a screen message.
                         match engine.screen_rows(range.from, range.count) {
                             Ok(lines) => {
-                                let response = json!({"surface": surface_id, "body": {"event": "screen.rows", "from": range.from, "count": range.count, "lines": lines}});
+                                let response = json!({"surface": surface_id, "body": {"event": "screen.rows", "from": range.from, "count": range.count, "rows": lines}});
                                 if output_tx.reply(response).await.is_err() { return; }
                             }
                             Err(reason) => {
