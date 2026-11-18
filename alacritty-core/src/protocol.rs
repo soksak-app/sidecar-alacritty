@@ -1,5 +1,6 @@
 use crate::encoding::{self, Key};
 use crate::events::{Events, Level, Subject};
+use crate::guard::{self, LineInput};
 use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::policy::Class;
 use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, screen_cells};
@@ -1444,6 +1445,47 @@ enum InputAction {
     Key(InputKey),
     Command(InputKey),
     Focus(bool),
+}
+
+/// The inputs of a transaction as the command line sees them. Focus changes do not change the line.
+fn line_inputs(actions: &[InputAction]) -> Vec<LineInput<'_>> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            InputAction::Insert { text, .. } => Some(LineInput::Text(text.as_str())),
+            InputAction::Key(key) | InputAction::Command(key) => Some(line_key(key)),
+            InputAction::Focus(_) => None,
+        })
+        .collect()
+}
+
+/// A key as the command line sees it. Only plain keys and Ctrl-C or Ctrl-U have a known effect on the line; any other key
+/// makes the guard stop following the line.
+fn line_key(key: &InputKey) -> LineInput<'_> {
+    let plain = !key.ctrl && !key.alt;
+    match key.key.as_str() {
+        "Enter" | "KeypadEnter" if plain => LineInput::Enter,
+        "Backspace" if plain => LineInput::Backspace,
+        "Char" if plain => LineInput::Text(key.text.as_str()),
+        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => LineInput::Discard,
+        _ if plain && !key.text.is_empty() => LineInput::Text(key.text.as_str()),
+        "Keypad0" if plain => LineInput::Text("0"),
+        "Keypad1" if plain => LineInput::Text("1"),
+        "Keypad2" if plain => LineInput::Text("2"),
+        "Keypad3" if plain => LineInput::Text("3"),
+        "Keypad4" if plain => LineInput::Text("4"),
+        "Keypad5" if plain => LineInput::Text("5"),
+        "Keypad6" if plain => LineInput::Text("6"),
+        "Keypad7" if plain => LineInput::Text("7"),
+        "Keypad8" if plain => LineInput::Text("8"),
+        "Keypad9" if plain => LineInput::Text("9"),
+        "KeypadDecimal" if plain => LineInput::Text("."),
+        "KeypadPlus" if plain => LineInput::Text("+"),
+        "KeypadMinus" if plain => LineInput::Text("-"),
+        "KeypadMultiply" if plain => LineInput::Text("*"),
+        "KeypadDivide" if plain => LineInput::Text("/"),
+        _ => LineInput::Other,
+    }
 }
 
 fn require_exact_fields(value: &Value, fields: &[&str], description: &str) -> Result<(), String> {
@@ -3750,6 +3792,8 @@ async fn surface_task(
     let mut screens = ScreenStream::default();
     let mut screen_watched = false;
     let mut session_id: Option<String> = None;
+    // The command line that the shell of the session holds, as the input of this surface changes it (guard.rs).
+    let mut line_guard = guard::LineGuard::default();
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
     let mut preserved_inline_images = Vec::new();
@@ -4325,6 +4369,21 @@ async fn surface_task(
                             if output_tx.reply(response).await.is_err() { return; }
                             continue;
                         }
+                        // A transaction that submits a refused command line writes nothing (guard.rs). The guard follows
+                        // only the line editing of the shell: an alternate screen or application keypad mode belongs to the
+                        // program that reads the keys, so the line is reset and the input is not judged.
+                        let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                        if !shell_line {
+                            line_guard = guard::LineGuard::default();
+                        }
+                        if let (Some(sid), true) = (session_id.as_deref(), shell_line) {
+                            let inputs_of_line = line_inputs(&actions);
+                            if let Some((rule, reason)) = guard::judge_transaction(&log, &mut line_guard, sid, &cids, &inputs_of_line) {
+                                let response = json!({"surface": surface_id, "body": {"error": "guardRefused", "rule": rule, "reason": reason}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                                continue;
+                            }
+                        }
 
                         cursor_activity = Instant::now();
                         last_cursor_frame = None;
@@ -4372,7 +4431,20 @@ async fn surface_task(
                                     && !present_screen(&surface_id, screen, state, &output_tx, "paste", &log, inputs.sequence).await { return; }
                             }
                         }
+                        let shell_line = { let modes = engine.modes(); !modes.alt_screen && !modes.app_keypad };
+                        if !shell_line {
+                            line_guard = guard::LineGuard::default();
+                        }
                         if let Some(ref sid) = session_id {
+                            if shell_line
+                                && let Some((rule, reason)) = guard::judge_transaction(&log, &mut line_guard, sid, &cids, &[LineInput::Text(text.as_str())])
+                            {
+                                let response = json!({"surface": surface_id, "body": {"error": "guardRefused", "rule": rule, "reason": reason}});
+                                if output_tx.reply(response).await.is_err() {
+                                    return;
+                                }
+                                continue;
+                            }
                             let bytes = match encoding::encode_paste(&text, &engine.modes()) {
                                 Ok(bytes) => bytes,
                                 Err(error) => {
