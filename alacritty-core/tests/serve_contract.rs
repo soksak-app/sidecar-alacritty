@@ -145,6 +145,22 @@ impl MockEngine {
 }
 
 impl Engine for MockEngine {
+    fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Ok((0..u64::from(count))
+            .map(|offset| {
+                let label = format!("R{}", from + offset);
+                label
+                    .chars()
+                    .map(|ch| Cell {
+                        ch: Some(compact_str::CompactString::from(&*ch.encode_utf8(&mut [0; 4]))),
+                        width: 1,
+                        ..Default::default()
+                    })
+                    .collect()
+            })
+            .collect())
+    }
+
     fn set_theme(&mut self, theme: TerminalTheme) {
         if self.follows_default_background {
             let [r, g, b] = theme.background;
@@ -8636,6 +8652,66 @@ async fn a_shell_mark_in_the_output_is_reported_as_a_shell_state_event() {
     assert_eq!(value["body"]["to"], "running");
     assert_eq!(value["body"]["source"], "osc133");
     assert_eq!(value["body"]["sequence"], 1);
+    drop(to_serve);
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_row_range_screen_read_replies_with_the_screen_rows_event_of_the_contract() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = br#"{"surface":"owned-surface","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"owned-surface","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"owned-surface","body":{"operation":"screen.read","from":2,"count":2}}
+"#;
+    let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let calls_for_factory = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "owned-session".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+
+    let task = tokio::spawn(serve(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+    ));
+    to_serve.write_all(input).await.unwrap();
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mut reply = None;
+    for _ in 0..12 {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("timeout waiting for the screen rows reply")
+            .unwrap()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if value["body"]["event"] == "screen.rows" {
+            reply = Some(value);
+            break;
+        }
+    }
+    let value = reply.expect("the screen rows event was not emitted");
+    assert_eq!(value["surface"], "owned-surface");
+    assert_eq!(value["body"]["from"], 2);
+    assert_eq!(value["body"]["count"], 2);
+    let rows = value["body"]["rows"]
+        .as_array()
+        .expect("the reply carries the rows key of the contract");
+    assert_eq!(rows.len(), 2);
+    let text = |row: &serde_json::Value| -> String {
+        row.as_array()
+            .expect("a row is a list of cells")
+            .iter()
+            .map(|cell| cell["ch"].as_str().expect("a cell carries its character"))
+            .collect()
+    };
+    assert_eq!(text(&rows[0]), "R2");
+    assert_eq!(text(&rows[1]), "R3");
     drop(to_serve);
     task.await.unwrap().unwrap();
 }
