@@ -2571,3 +2571,23 @@ fn sgr_two_changes_the_screen_hash_beyond_the_foreground_color() {
         "the dim attribute must change the screen hash"
     );
 }
+
+#[test]
+fn shell_marks_are_drained_as_events_in_the_order_they_arrive() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b]133;A\x07");
+    engine.feed(b"ls\r\n\x1b]133;C\x07output\r\n\x1b]133;D;0\x07");
+
+    let marks: Vec<ShellMarker> = engine
+        .drain_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            EngineEvent::ShellState { marker, .. } => Some(marker),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        marks,
+        vec![ShellMarker::PromptStart, ShellMarker::CommandStart, ShellMarker::CommandFinished]
+    );
+}

@@ -159,6 +159,23 @@
       },
       "description": "Reading the PTY of a session failed."
     },
+    "sidecar.alacritty.shell.state": {
+      "layer": "sidecar",
+      "class": "lifecycle",
+      "level": "info",
+      "fields": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "from": {"type": ["string", "null"], "enum": ["idle", "running", "exited", null]},
+          "to": {"type": "string", "enum": ["idle", "running", "exited"]},
+          "source": {"type": "string", "enum": ["osc133"]},
+          "sequence": {"type": "integer", "minimum": 1}
+        },
+        "required": ["from", "to", "source", "sequence"]
+      },
+      "description": "The shell state of a session changed. from is the state before, or null when no mark was applied; to is idle, running or exited; source is osc133, the OSC 133 marks of the shell; sequence counts the changes of the session from 1."
+    },
     "sidecar.alacritty.pty_write": {
       "layer": "sidecar",
       "class": "io",

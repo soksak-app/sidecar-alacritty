@@ -13,7 +13,7 @@ use soksak_sidecar_alacritty_core::platform::darwin::frame::{Frame, metrics};
 /// Serve contract integration tests that use a fake daemon
 use soksak_sidecar_alacritty_core::protocol::{
     Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, OutputSubmissionObserver,
-    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellRequest,
+    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellMarker, ShellRequest,
     serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
 };
 use soksak_sidecar_alacritty_core::pty::PtyMeasurement;
@@ -217,6 +217,12 @@ impl Engine for MockEngine {
                     height: Dimension::Auto,
                     preserve_aspect_ratio: true,
                 },
+            });
+        }
+        if bytes == b"\x1b]133;C\x07" {
+            self.pending_events.push(EngineEvent::ShellState {
+                marker: ShellMarker::CommandStart,
+                params: Vec::new(),
             });
         }
         if bytes == b"\x1b]7;file:///tmp/project\x07" {
@@ -572,7 +578,7 @@ impl SessionPort for FakeSessionPort {
                 echoes_enqueued,
             });
         }
-        if &*data == b"\x1b]7;file:///tmp/project\x07" {
+        if &*data == b"\x1b]7;file:///tmp/project\x07" || &*data == b"\x1b]133;C\x07" {
             let _ = self.event_tx.send(DaemonEvent::Output {
                 session_id: self.session_id.clone(),
                 data: data.to_vec(),
@@ -8583,4 +8589,53 @@ async fn a_reported_mouse_drag_past_the_view_moves_no_viewport() {
         "a reported gesture selects nothing: {output}"
     );
     assert!(!output.contains("invalidParams"), "{output}");
+}
+
+#[tokio::test]
+async fn a_shell_mark_in_the_output_is_reported_as_a_shell_state_event() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let input = br#"{"surface":"owned-surface","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
+{"surface":"owned-surface","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
+{"surface":"owned-surface","body":{"operation":"input","actions":[{"type":"insert","text":"\u001b]133;C\u0007","replacementRange":null,"attributed":false}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#;
+    let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
+    let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
+    let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
+    let calls_for_factory = calls.clone();
+    let session_port_factory = Arc::new(move || {
+        Arc::new(FakeSessionPort::new(
+            "owned-session".to_string(),
+            calls_for_factory.clone(),
+        )) as Arc<dyn SessionPort>
+    });
+
+    let task = tokio::spawn(serve(
+        engine_factory,
+        serve_in,
+        serve_out,
+        session_port_factory,
+    ));
+    to_serve.write_all(input).await.unwrap();
+    let mut lines = tokio::io::BufReader::new(from_serve).lines();
+    let mut found = None;
+    for _ in 0..12 {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("timeout waiting for the shell state event")
+            .unwrap()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if value["body"]["event"] == "shell.state" {
+            found = Some(value);
+            break;
+        }
+    }
+    let value = found.expect("the shell state event was not emitted");
+    assert_eq!(value["surface"], "owned-surface");
+    assert_eq!(value["body"]["from"], serde_json::Value::Null);
+    assert_eq!(value["body"]["to"], "running");
+    assert_eq!(value["body"]["source"], "osc133");
+    assert_eq!(value["body"]["sequence"], 1);
+    drop(to_serve);
+    task.await.unwrap().unwrap();
 }
