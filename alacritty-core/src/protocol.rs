@@ -980,6 +980,9 @@ pub struct Cell {
     pub underline: bool,
     #[serde(default)]
     pub inverse: bool,
+    /// The cell is drawn dim (SGR 2). Its foreground is already blended toward the background.
+    #[serde(default)]
+    pub dim: bool,
     /// The URI of an OSC 8 hyperlink. A cell without a link has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -996,6 +999,7 @@ impl Default for Cell {
             italic: false,
             underline: false,
             inverse: false,
+            dim: false,
             link: None,
         }
     }

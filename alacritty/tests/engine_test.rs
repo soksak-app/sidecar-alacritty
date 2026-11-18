@@ -2490,3 +2490,45 @@ fn an_osc_7_with_another_scheme_is_an_explicit_error() {
         ["OSC 7 directory URI is not a file URI: \"kitty-shell-cwd:///tmp/a\""]
     );
 }
+
+#[test]
+fn sgr_two_marks_the_cell_dim_in_the_screen_message() {
+    // SGR 2 (dim) draws the text of a TUI suggestion. The screen message must carry it, so the
+    // drawing side can show the cell dim.
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 4);
+    engine.feed(b"\x1b[2mS\x1b[0mN");
+    let message = serde_json::to_value(engine.screen()).expect("screen serializes");
+    assert_eq!(
+        message["lines"][0][0]["dim"],
+        serde_json::json!(true),
+        "the cell written under SGR 2 must be dim: {message}"
+    );
+    assert_eq!(
+        message["lines"][0][1]["dim"],
+        serde_json::json!(false),
+        "the cell written after SGR 0 must not be dim: {message}"
+    );
+    // The default foreground #d0d0d0 blended toward the background #1e1e1e, two parts to one: 148 is #94.
+    assert_eq!(
+        message["lines"][0][0]["fg"],
+        serde_json::json!("#949494"),
+        "the dim cell must draw its foreground blended toward the background: {message}"
+    );
+}
+
+#[test]
+fn sgr_two_changes_the_screen_hash_beyond_the_foreground_color() {
+    // The explicit foreground #949494 equals the blended dim foreground, so only the dim attribute bit
+    // separates the two screens.
+    let mut dim = AlacrittyEngine::new();
+    dim.resize(20, 4);
+    dim.feed(b"\x1b[2mS");
+    let mut plain = AlacrittyEngine::new();
+    plain.resize(20, 4);
+    plain.feed(b"\x1b[38;2;148;148;148mS");
+    let dim_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&dim.screen()).expect("dim screen hashes");
+    let plain_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&plain.screen()).expect("plain screen hashes");
+    assert_ne!(dim_hash, plain_hash, "the dim attribute must change the screen hash");
+}
+
