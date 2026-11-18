@@ -252,6 +252,7 @@ async fn watch_requests(
                 Some(request) => waiting.push_back(request),
                 None => return,
             },
+            // default: the branch is enabled only while a deadline is set, so the fallback instant is never used.
             _ = tokio::time::sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
                 let Some(request) = waiting.pop_front().and_then(|request| request.upgrade()) else {
                     continue;
@@ -331,15 +332,27 @@ impl TransferStore {
     }
 
     fn images(&self) -> std::sync::MutexGuard<'_, Option<Vec<RetainedTransfer>>> {
-        self.images.lock().unwrap_or_else(|error| {
-            let images = error.into_inner();
-            self.log.record_error(
-                "image transfer store",
-                "transfer store lock was poisoned; transfer state retained",
-            );
-            self.images.clear_poison();
-            images
-        })
+        self.images
+            .lock()
+            // default: recover the retained transfer state; the poisoning is reported by recovered_images.
+            .unwrap_or_else(|error| self.recovered_images(error.into_inner()))
+    }
+
+    fn recovered_images<'a>(
+        &'a self,
+        images: std::sync::MutexGuard<'a, Option<Vec<RetainedTransfer>>>,
+    ) -> std::sync::MutexGuard<'a, Option<Vec<RetainedTransfer>>> {
+        self.log.emit_for(
+            Level::Error,
+            "sidecar.alacritty.record.error",
+            Subject::NONE,
+            &serde_json::json!({
+                "where": "image transfer store",
+                "text": "transfer store lock was poisoned; transfer state retained",
+            }),
+        );
+        self.images.clear_poison();
+        images
     }
 
     /// If the connection has ended, no reply can come, so the transfer image is released at once.
@@ -1694,13 +1707,14 @@ fn parse_screen_read_rows(body: &Value) -> Result<Option<ScreenRowRange>, String
             let from = from
                 .as_u64()
                 .ok_or("screen.read from must be a non-negative integer")?;
-            let count = count
-                .as_u64()
-                .and_then(|count| u32::try_from(count).ok())
-                .filter(|count| (1..=MAX_SCREEN_ROWS_READ).contains(count))
-                .ok_or(format!(
-                    "screen.read count must be an integer from 1 to {MAX_SCREEN_ROWS_READ}"
-                ))?;
+            let count_error = || {
+                format!("screen.read count must be an integer from 1 to {MAX_SCREEN_ROWS_READ}")
+            };
+            let count = count.as_u64().ok_or_else(count_error)?;
+            let count = u32::try_from(count).map_err(|_| count_error())?;
+            if !(1..=MAX_SCREEN_ROWS_READ).contains(&count) {
+                return Err(count_error());
+            }
             Ok(Some(ScreenRowRange { from, count }))
         }
         _ => Err("screen.read requires both from and count, or neither".to_string()),
@@ -3824,6 +3838,7 @@ async fn surface_task(
             Some(result) = inputs.next_write_result(), if !inputs.pending_writes.is_empty() => {
                 if !inputs.finish_front_write(result).await { return; }
             }
+            // default: the branch is enabled only while a sync deadline is set, so the fallback instant is never used.
             _ = tokio::time::sleep_until(sync_deadline.unwrap_or_else(Instant::now)), if sync_deadline.is_some() => {
                 // The update ends at its deadline. The output that it held is then handled like the
                 // output of a feed: its events are sent, and the frame clock or a frame draws it.
@@ -3844,6 +3859,7 @@ async fn surface_task(
                     }
                 }
             }
+            // default: the branch is enabled only while a frame clock is set, so the fallback instant is never used.
             _ = tokio::time::sleep_until(frame_clock.unwrap_or_else(Instant::now)), if frame_clock.is_some() => {
                 frame_clock = None;
                 if session_id.is_some()
@@ -3915,10 +3931,11 @@ async fn surface_task(
                         // holds a configured image comes from a second owner of the surface. It
                         // would make the surface headless while its image stays shown, so the
                         // output would be fed and not drawn; it is refused and changes nothing.
-                        if image.is_none() && (requested_image.is_some() || image_state.is_some()) {
-                            let shown = requested_image.as_deref()
+                        if image.is_none()
+                            && let Some(shown) = requested_image
+                                .as_deref()
                                 .or(image_state.as_ref().map(|state| state.name.as_str()))
-                                .unwrap_or_default();
+                        {
                             let reason = format!("surface {surface_id} has the image {shown}; an open without image is refused");
                             log.record_error("open", &reason);
                             let response = json!({"surface": surface_id, "body": {"error": "imageAttached", "reason": reason}});
@@ -5568,6 +5585,7 @@ where
                                     .and_then(|detach| {
                                         image_detach_refusal(&surface_id, detach, "stale attachment", None)
                                     })
+                                    // default: a request without an image.detach field is answered with the plain stale attachment error.
                                     .unwrap_or_else(|| json!({"surface": surface_id, "body": {"error": "stale attachment"}}));
                                 if reply_tx.reply(response).await.is_err() {
                                     break;
@@ -6001,6 +6019,7 @@ where
                                             SurfaceCommand::SelectionUpdate {
                                                 x,
                                                 y,
+                                                // default: an absent overflow is refused above for selection.update, and selection.start does not use it.
                                                 overflow: overflow.unwrap_or(0.0),
                                             }
                                         };
@@ -6267,6 +6286,7 @@ where
                                                 Some(&reason),
                                             )
                                         })
+                                        // default: a request without an image.detach field is answered with the plain invalidParams body, which carries the same reason.
                                         .unwrap_or_else(|| {
                                             json!({"surface": surface_id,
                                             "body": {"error": "invalidParams", "reason": reason}})
@@ -6377,6 +6397,7 @@ where
                 // The surface and the cids are read from the line again, so an envelope that does
                 // not parse is answered on its surface when the surface is a string; a line without
                 // one is answered with an empty surface.
+                // default: the line already failed to parse above, and the reply carries that parse error, so a second failure reads no surface or cids.
                 let line = serde_json::from_str::<Value>(trimmed).ok();
                 let surface = line
                     .as_ref()

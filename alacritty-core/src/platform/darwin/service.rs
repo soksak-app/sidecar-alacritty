@@ -351,8 +351,7 @@ pub async fn serve_persistent(
     let changed: Changed = Arc::new(move |_changes: &[Change]| {
         match endpoint_left(&watched_dir, &watched_token) {
             Ok(Some(reason)) => {
-                // The loop takes the first reason, and a later one is not used after the loop
-                // ended.
+                // default: the loop takes the first reason and ignores a later one, so a send after the loop ended is dropped by design.
                 let _ = ended_sender.send(reason);
             }
             Ok(None) => {}
