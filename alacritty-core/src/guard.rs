@@ -216,6 +216,7 @@ fn is_assignment(text: &str) -> bool {
 }
 
 fn base_name(text: &str) -> &str {
+    // default: a text without a slash is its own base name.
     text.rsplit('/').next().unwrap_or(text)
 }
 
@@ -534,8 +535,11 @@ fn git_push_force_protected(words: &[Word]) -> bool {
         return true;
     }
     refspecs[1..].iter().any(|refspec| {
+        // default: a refspec without a plus sign is compared as written.
         let spec = refspec.strip_prefix('+').unwrap_or(*refspec);
+        // default: a spec without a colon is its own destination.
         let destination = spec.rsplit(':').next().unwrap_or(spec);
+        // default: a destination without the heads prefix is compared as written.
         let branch = destination.strip_prefix("refs/heads/").unwrap_or(destination);
         matches!(branch, "main" | "master" | "HEAD" | "")
     })
