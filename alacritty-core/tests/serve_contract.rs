@@ -8862,7 +8862,7 @@ async fn a_file_created_in_the_registered_folder_produces_a_file_changed_event()
 
     std::fs::write(dir.path().join("note.txt"), "hello").expect("file must be written");
     let event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed" && value["body"]["path"] == "note.txt"
+        value["body"]["event"] == "file.changed" && value["body"]["path"] == "note.txt"
     })
     .await;
     assert_eq!(event["body"]["registration"], registration, "{event}");
@@ -8887,7 +8887,7 @@ async fn seq_counts_from_one_for_each_registration_in_one_process() {
 
     std::fs::write(first_dir.path().join("a.txt"), "a").expect("file must be written");
     let first_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "a.txt"
             && value["body"]["kind"] == "created"
     })
@@ -8897,7 +8897,7 @@ async fn seq_counts_from_one_for_each_registration_in_one_process() {
 
     std::fs::write(first_dir.path().join("b.txt"), "b").expect("file must be written");
     let second_file_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "b.txt"
             && value["body"]["kind"] == "created"
     })
@@ -8909,7 +8909,7 @@ async fn seq_counts_from_one_for_each_registration_in_one_process() {
 
     std::fs::write(second_dir.path().join("c.txt"), "c").expect("file must be written");
     let other_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "c.txt"
             && value["body"]["kind"] == "created"
     })
@@ -8929,7 +8929,7 @@ async fn a_message_file_over_the_size_limit_is_refused_by_messages_read() {
     let oversized = vec![b'a'; 64 * 1024 + 1];
     std::fs::write(dir.path().join("big.txt"), &oversized).expect("file must be written");
     next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "big.txt"
             && value["body"]["kind"] == "created"
     })
@@ -8959,7 +8959,7 @@ async fn messages_read_returns_messages_after_the_given_seq_and_repeats_the_same
 
     std::fs::write(dir.path().join("one.txt"), "one").expect("file must be written");
     let first_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "one.txt"
             && value["body"]["kind"] == "created"
     })
@@ -8968,7 +8968,7 @@ async fn messages_read_returns_messages_after_the_given_seq_and_repeats_the_same
 
     std::fs::write(dir.path().join("two.txt"), "two").expect("file must be written");
     let second_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.file.changed"
+        value["body"]["event"] == "file.changed"
             && value["body"]["path"] == "two.txt"
             && value["body"]["kind"] == "created"
     })
@@ -9164,7 +9164,7 @@ async fn removing_the_registered_folder_sends_registration_closed_with_folder_re
 
     std::fs::remove_dir_all(&folder).expect("folder must be removed");
     let event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "sidecar.alacritty.registration.closed"
+        value["body"]["event"] == "registration.closed"
     })
     .await;
     assert_eq!(event["body"]["registration"], registration, "{event}");
