@@ -793,6 +793,13 @@ pub trait Engine: Send + 'static {
     fn scroll_to_newest(&mut self) -> bool;
     fn cursor(&self) -> Cursor;
     fn screen(&mut self) -> Screen;
+    /// The cells of the stored rows `from` to `from + count` (exclusive, absolute numbering of
+    /// [`ScreenRowRange`]), with trailing default cells removed from each row. An out-of-range
+    /// `from` or `count` is an error that names the stored range. An engine without stored rows
+    /// returns an error.
+    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        Err("screen rows are not available from this engine".to_string())
+    }
     fn scroll_generation(&self) -> i64 {
         0
     }
@@ -1162,6 +1169,21 @@ pub struct Scrollback {
     pub history: u32,
 }
 
+/// The most rows one `screen.read {from, count}` request returns. A larger `count` is refused with
+/// `invalidParams`; the request does not return a clamped number of rows.
+pub const MAX_SCREEN_ROWS_READ: u32 = 200;
+
+/// The rows that a `screen.read` request with `from` and `count` names. `from` is an absolute row
+/// number: row 0 is the first row that entered the history, and the viewport starts after the
+/// history rows. The rows `from` to `from + count` (exclusive) must lie inside the stored rows, from
+/// the oldest kept history row to the last screen row; a request outside them is refused with an
+/// `invalidParams` reply that names the stored range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenRowRange {
+    pub from: u64,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Screen {
     pub cols: u16,
@@ -1313,7 +1335,10 @@ enum SurfaceCommand {
     Cursor {
         policy: CursorPolicy,
     },
-    ScreenRead,
+    /// A `screen.read` request. `None` reads the viewport; `Some` reads the named stored rows.
+    ScreenRead {
+        rows: Option<ScreenRowRange>,
+    },
     ScreenWatch {
         enabled: bool,
     },
@@ -1656,6 +1681,30 @@ fn decorate_screen(
     }
     screen.cursor.preedit = preedit.clone();
     screen
+}
+
+/// The rows of a `screen.read` body. Without `from` and `count` the request reads the viewport and
+/// the result is `None`. `from` (a non-negative integer) and `count` (an integer from 1 to
+/// `MAX_SCREEN_ROWS_READ`) must both be present; a request with only one of them, or with a value
+/// of the wrong type or outside its range, is refused with the reason.
+fn parse_screen_read_rows(body: &Value) -> Result<Option<ScreenRowRange>, String> {
+    match (body.get("from"), body.get("count")) {
+        (None, None) => Ok(None),
+        (Some(from), Some(count)) => {
+            let from = from
+                .as_u64()
+                .ok_or("screen.read from must be a non-negative integer")?;
+            let count = count
+                .as_u64()
+                .and_then(|count| u32::try_from(count).ok())
+                .filter(|count| (1..=MAX_SCREEN_ROWS_READ).contains(count))
+                .ok_or(format!(
+                    "screen.read count must be an integer from 1 to {MAX_SCREEN_ROWS_READ}"
+                ))?;
+            Ok(Some(ScreenRowRange { from, count }))
+        }
+        _ => Err("screen.read requires both from and count, or neither".to_string()),
+    }
 }
 
 fn parse_cursor_policy(body: &Value) -> Result<CursorPolicy, String> {
@@ -4748,7 +4797,22 @@ async fn surface_task(
                         let response = json!({"surface": surface_id, "body": {"event":"screen.watching", "enabled":enabled}});
                         if output_tx.reply(response).await.is_err() { return; }
                     }
-                    SurfaceCommand::ScreenRead => {
+                    SurfaceCommand::ScreenRead { rows: Some(range) } => {
+                        // Stored rows are read without changing the sent screen or the frame record:
+                        // the reply is the cells of the named rows, not a screen message.
+                        match engine.screen_rows(range.from, range.count) {
+                            Ok(lines) => {
+                                let response = json!({"surface": surface_id, "body": {"event": "screen.rows", "from": range.from, "count": range.count, "lines": lines}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                            }
+                            Err(reason) => {
+                                log.record_error("screen.read", reason.clone());
+                                let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason, "operation": "screen.read"}});
+                                if output_tx.reply(response).await.is_err() { return; }
+                            }
+                        }
+                    }
+                    SurfaceCommand::ScreenRead { rows: None } => {
                         // The reply of a screen read is the full form, from which the page continues.
                         screens.forget();
                         let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, cursor_activity.elapsed().as_millis() as u64);
@@ -6042,11 +6106,19 @@ where
                                     }
                                 }
                             },
-                            "screen.read" => {
-                                if tx.send(SurfaceCommand::ScreenRead).await.is_err() {
-                                    break;
+                            "screen.read" => match parse_screen_read_rows(&body) {
+                                Ok(rows) => {
+                                    if tx.send(SurfaceCommand::ScreenRead { rows }).await.is_err() {
+                                        break;
+                                    }
                                 }
-                            }
+                                Err(reason) => {
+                                    let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason, "operation": "screen.read"}});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            },
                             "clipboard.resolve" => {
                                 let request_id = body.get("requestId").and_then(Value::as_u64);
                                 let text =

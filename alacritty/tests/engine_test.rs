@@ -850,6 +850,41 @@ fn the_viewport_scrolls_through_the_scrollback_and_returns_to_the_newest_output(
 /// history, and then extends the selection to the top row of the moved viewport
 /// (docs/spec/alacritty-core.md): the start stays on its line, so the selection covers the lines
 /// between the oldest retained line and the start.
+/// `screen.read {from, count}` reads rows from the stored rows, including the history above the
+/// viewport (docs/spec/alacritty-core.md): row 0 is the first row that entered the history, so the
+/// viewport of a 4-row screen after ten lines starts at row 7.
+#[test]
+fn screen_read_returns_rows_above_the_viewport() {
+    let mut engine = AlacrittyEngine::new();
+    engine.resize(20, 4);
+    for index in 0..10 {
+        engine.feed(format!("ROW{index:02}\r\n").as_bytes());
+    }
+    assert_eq!(engine.scrollback(), (0, 7), "seven rows are in the history");
+    assert_eq!(line_text(&engine.screen(), 0), "ROW07");
+
+    let above = engine
+        .screen_rows(4, 3)
+        .expect("rows 4 to 6 are in the history");
+    let above_text: Vec<String> = above
+        .iter()
+        .map(|row| {
+            row.iter()
+                .filter_map(|cell| cell.ch.as_deref())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(above_text, ["ROW04", "ROW05", "ROW06"]);
+
+    let first = engine.screen_rows(0, 1).expect("row 0 is the oldest row");
+    assert_eq!(first.len(), 1);
+    let first_text: String = first[0]
+        .iter()
+        .filter_map(|cell| cell.ch.as_deref())
+        .collect();
+    assert_eq!(first_text, "ROW00");
+}
+
 #[test]
 fn a_selection_extended_past_the_oldest_retained_line_starts_at_that_line() {
     let mut engine = AlacrittyEngine::new();
@@ -2527,8 +2562,12 @@ fn sgr_two_changes_the_screen_hash_beyond_the_foreground_color() {
     let mut plain = AlacrittyEngine::new();
     plain.resize(20, 4);
     plain.feed(b"\x1b[38;2;148;148;148mS");
-    let dim_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&dim.screen()).expect("dim screen hashes");
-    let plain_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&plain.screen()).expect("plain screen hashes");
-    assert_ne!(dim_hash, plain_hash, "the dim attribute must change the screen hash");
+    let dim_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&dim.screen())
+        .expect("dim screen hashes");
+    let plain_hash = soksak_sidecar_alacritty_core::screen_hash::screen_hash(&plain.screen())
+        .expect("plain screen hashes");
+    assert_ne!(
+        dim_hash, plain_hash,
+        "the dim attribute must change the screen hash"
+    );
 }
-

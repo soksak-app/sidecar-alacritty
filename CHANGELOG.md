@@ -1,5 +1,6 @@
 # Changelog
 
+- S118: The `screen.read` request takes `from` and `count` and returns retained rows above the viewport, numbered by the absolute line numbers; the reply is the event `screen.rows`.
 - S117: A dim cell draws its foreground blended toward its background, and the screen hash covers the dim attribute.
 - S115: A text selection drag past the top or the bottom edge of the view scrolls the history: `selection.update` takes `overflow`, and a nonzero overflow moves the primary viewport by `ceil(|overflow| / cell height)` rows within the retained history before the selection extends; an unchanged update and a reported mouse gesture move nothing. Red: the drag tests failed with no viewport move. Green: they pass.
 - S114: The `view` event carries `background`, the default background of its frame, and a frame whose default background changes sends one. Red: the theme and OSC 11 view tests failed. Green: they pass.

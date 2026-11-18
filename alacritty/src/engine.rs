@@ -2108,6 +2108,44 @@ impl Engine for AlacrittyEngine {
         }
     }
 
+    fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+        let grid = self.term.grid();
+        // Absolute numbering of `absolute`: the rows dropped past the history limit are counted, so
+        // the oldest kept row is `dropped`. `dropped` is never negative.
+        let first = self.dropped as u64;
+        let end = first + grid.history_size() as u64 + grid.screen_lines() as u64;
+        let maximum = soksak_sidecar_alacritty_core::protocol::MAX_SCREEN_ROWS_READ;
+        if count == 0 || count > maximum {
+            return Err(format!(
+                "screen.read count {count} must be from 1 to {maximum}"
+            ));
+        }
+        let to = from.saturating_add(u64::from(count));
+        if from < first || to > end {
+            return Err(format!(
+                "screen.read rows {from} to {to} are outside the stored rows {first} to {end}"
+            ));
+        }
+        let history = grid.history_size() as i64;
+        let colors = self.term.colors();
+        let mut rows = Vec::with_capacity(count as usize);
+        for absolute in from..to {
+            // The oldest kept history row is grid line -history, and the screen starts at line 0.
+            let line = absolute as i64 - self.dropped - history;
+            let mut cells: Vec<Cell> = (0..grid.columns())
+                .map(|column| self.cell(&grid[Line(line as i32)][Column(column)], colors))
+                .collect();
+            while cells
+                .last()
+                .is_some_and(|cell| self.is_trimmable_default_cell(cell))
+            {
+                cells.pop();
+            }
+            rows.push(cells);
+        }
+        Ok(rows)
+    }
+
     /// Count of rows that have scrolled into the history, including the rows dropped past the
     /// history limit. It increases with each row pushed up and does not change when the history
     /// reaches its limit.
