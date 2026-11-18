@@ -1,4 +1,5 @@
 // Common VT layer: protocol, session lifetime, screen types, and the Engine trait
+pub mod adapter;
 pub mod arguments;
 pub mod directory_uri;
 pub mod encoding;
@@ -16,6 +17,7 @@ pub mod screen_stream;
 pub mod service;
 pub mod shell_integration;
 pub mod stall;
+pub mod supervise;
 pub mod thread;
 
 pub use palette::{

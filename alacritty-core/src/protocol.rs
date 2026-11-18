@@ -1423,14 +1423,15 @@ enum SurfaceCommand {
 
 use crate::platform::ImageConfiguration;
 
-/// Input key information
-#[derive(Debug, Clone, Deserialize)]
-struct InputKey {
-    key: String,
-    text: String,
-    shift: bool,
-    alt: bool,
-    ctrl: bool,
+/// Input key information. The key adapter (`adapter.rs`) returns it, and it is the `key` action of the
+/// `input` operation: `{"type": "key", "key", "text" (Char only), "shift", "alt", "ctrl"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct InputKey {
+    pub key: String,
+    pub text: String,
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
 }
 
 #[derive(Debug)]
