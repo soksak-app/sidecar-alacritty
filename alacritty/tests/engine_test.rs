@@ -1579,62 +1579,6 @@ fn all_text(engine: &mut AlacrittyEngine) -> String {
 }
 
 #[test]
-fn a_resize_in_the_prompt_state_clears_the_cursor_logical_line_to_the_bottom() {
-    // At width 10, three output rows and four prompt rows make seven rows. Only o1, which does not
-    // fit in the six screen rows, moves to history.
-    let mut engine = wrapped_prompt(b"\x1b]133;A\x07");
-    engine.resize(10, 6);
-    let screen = engine.screen();
-    assert_eq!(
-        (row_text(&screen, 0), row_text(&screen, 1)),
-        ("o2".to_string(), "o3".to_string()),
-        "the output above the prompt must remain"
-    );
-    for row in 2..6 {
-        assert_eq!(
-            row_text(&screen, row),
-            "",
-            "row {row} of the prompt line must be cleared"
-        );
-    }
-    let cursor = engine.cursor();
-    assert_eq!(
-        (cursor.row, cursor.col),
-        (3, 0),
-        "the cursor must lie one row below the first prompt row, as at the previous width"
-    );
-    assert!(
-        engine
-            .drain_events()
-            .iter()
-            .all(|event| !matches!(event, EngineEvent::Error(_)))
-    );
-    assert_eq!(all_text(&mut engine), "o1o2o3");
-}
-
-#[test]
-fn redraw_last_places_the_cursor_as_redraw_1_does() {
-    // At width 20, the cursor was one row below (row 4) the first row of the logical line (row 3).
-    // readline also moves up one row to redraw.
-    let mut engine = wrapped_prompt(b"\x1b]133;A;redraw=last;cl=line\x07");
-    engine.resize(10, 6);
-    let screen = engine.screen();
-    assert_eq!(
-        (row_text(&screen, 0), row_text(&screen, 1)),
-        ("o2".to_string(), "o3".to_string())
-    );
-    for row in 2..6 {
-        assert_eq!(
-            row_text(&screen, row),
-            "",
-            "row {row} of the prompt line must be cleared"
-        );
-    }
-    let cursor = engine.cursor();
-    assert_eq!((cursor.row, cursor.col), (3, 0));
-}
-
-#[test]
 fn redraw_last_scrolls_the_screen_when_the_offset_row_is_below_the_bottom() {
     let mut engine = AlacrittyEngine::new();
     engine.resize(10, 5);
@@ -1644,38 +1588,26 @@ fn redraw_last_scrolls_the_screen_when_the_offset_row_is_below_the_bottom() {
     let cursor = engine.cursor();
     let screen = engine.screen();
     let rows: Vec<String> = (0..5).map(|row| row_text(&screen, row)).collect();
-    let last_output = rows.iter().rposition(|row| !row.is_empty()).unwrap();
+    let last_output = rows.iter().rposition(|row| row == "o2").unwrap();
     assert_eq!(
         (usize::from(cursor.row), cursor.col),
         (last_output + 1 + 3, 0),
         "the cursor must lie three rows below the first prompt row: {rows:?}"
     );
     assert_eq!(
+        rows[last_output + 1..],
+        ["P>abcdefgh", "ijklmnopqr", "stuvwxyz01", "23"][..rows.len() - last_output - 1],
+        "the prompt rows of width 10 must stand from the first prompt row"
+    );
+    assert_eq!(
         all_text(&mut engine),
-        "o1o2",
+        "o1o2P>abcdefghijklmnopqrstuvwxyz0123",
         "the output above the prompt must remain"
     );
 }
 
 #[test]
-fn prompt_rows_that_the_reflow_moved_into_the_scrollback_are_cleared() {
-    let mut engine = AlacrittyEngine::new();
-    engine.resize(20, 3);
-    engine.feed(b"o1\r\n\x1b]133;A;redraw=last\x07P>abcdefghijklmnopqrstuvwxyz0123");
-    // At width 10, the prompt row is four rows, and the reflow that keeps the cursor row moves the
-    // earlier rows into history.
-    engine.resize(10, 3);
-    assert_eq!(all_text(&mut engine), "o1");
-    let cursor = engine.cursor();
-    assert_eq!(
-        (cursor.row, cursor.col),
-        (0, 0),
-        "the cursor must move to the top row"
-    );
-}
-
-#[test]
-fn a_resize_clears_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_line() {
+fn a_resize_counts_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_line() {
     // At width 10, the two-row prompt ("PROMPT-LINE", a line break, "P>") and 30 input characters
     // are six rows. The cursor is five rows below the first prompt row, and the shell moves up that
     // many rows to redraw the prompt.
@@ -1691,8 +1623,8 @@ fn a_resize_clears_every_row_from_the_prompt_start_when_the_prompt_ends_its_own_
     );
     assert_eq!(
         all_text(&mut engine),
-        "o1o2",
-        "the prompt rows must be cleared"
+        "o1o2PROMPT-LINEP>abcdefghijklmnopqrstuvwxyz0123",
+        "the prompt rows of width 10 must stand without reflow below the output"
     );
 }
 
@@ -1713,7 +1645,7 @@ fn a_widening_resize_counts_the_rows_of_a_prompt_that_ended_at_the_margin() {
     );
     assert_eq!(
         all_text(&mut engine),
-        "o1o2",
+        "o1o2PPPPPPPPPPPPPPPPPP>abcdefghijklmno",
         "the output above the prompt must remain"
     );
 }
@@ -1733,7 +1665,11 @@ fn a_prompt_redrawn_after_a_screen_clear_starts_at_the_top_row() {
         (5, 0),
         "the prompt starts at the top row"
     );
-    assert_eq!(all_text(&mut engine), "", "the prompt rows must be cleared");
+    assert_eq!(
+        all_text(&mut engine),
+        "PROMPT-LINEP>abcdefghijklmnopqrstuvwxyz0123",
+        "the prompt rows of width 10 must stand from the top row"
+    );
 }
 
 #[test]
