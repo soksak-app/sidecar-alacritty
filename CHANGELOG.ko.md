@@ -1,5 +1,7 @@
 # Changelog
 
+- S195: panic으로 끝난 persistent service의 surface task는 direct service가 쓰는 감시 함수를 통해 그 surface의 error event `surface task ended: <message>`와 error record로 보고된다.
+- S196: `sok-check events`가 다시 통과한다. guard default의 이유가 그 줄 위에 있고, folder claim은 poison된 lock을 복구한다.
 - S191: guard와 shell 상태의 source와 test를 rustfmt로 정리해서 `make test`의 `cargo fmt --all --check`가 main에서 통과한다. Red: 검사가 9개 파일에서 38개 차이를 보고했다. Green: 0으로 끝난다.
 - S190: 변화 event `shell.state`와 log event `sidecar.alacritty.shell.state`가 `exited`의 exit code `exit`를 가진다(core `docs/spec/terminal-state.md`). engine은 첫 parameter가 named parameter도 0부터 255까지의 정수도 아닌 `D`를 거부하며, `shell.state.read`는 `shell.state.current`로 답한다. core의 공유 case가 실제 engine과 실제 session으로 통과하며, 변경하지 않은 sidecar에서 event에는 `exit`가 없었다.
 - S188: sidecar가 `messages.register`로 surface의 message folder를 등록하고 crate `notify`로 감시하며, message `<from>.<token>.txt`의 각 변화에 sender `from`과 함께 `file.changed`를, folder가 제거되거나 이름이 바뀌면 `registration.closed`를 보내고, cursor epoch `registration`과 함께 `messages.read`와 `messages.wait`에 답한다(core docs/spec/messaging.md). sender 없는 `.txt` 이름은 `invalid-sender`로, 다른 registration의 cursor는 `epoch-changed`로 거부되며, 임시 이름은 event를 주지 않는다. serve test와 core의 공유 이름 case가 변경하지 않은 sidecar에서 실패했고 이제 통과한다.
