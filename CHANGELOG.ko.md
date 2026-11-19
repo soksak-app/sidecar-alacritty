@@ -1,5 +1,6 @@
 # Changelog
 
+- S205-1: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.
 - S202: `make repeat`가 `make test`의 cargo-nextest runner로 test를 실행하며 각 test는 자기 process에서 실행되므로, 자기 process의 할당이나 footprint를 재는 test는 자기 것만 잰다. 전에는 `cargo test`를 실행했다.
 - S201: catalog test가 catalog가 `sidecar.alacritty.shell.state`의 `sequence`에 쓰는 JSON Schema type `integer`를 받아들이고, guard의 emit site 두 개가 `events:` 주석에 `sidecar.alacritty.guard.allow`와 `sidecar.alacritty.guard.refuse`를 적으므로 `sok-check events`가 통과한다.
 - S200: 주석 언어 check가 `.bash`와 `.zsh` 파일을 bash grammar로 읽고, `alacritty-core/src/shell-integration/bash-integration.bash`의 주석은 영어다.

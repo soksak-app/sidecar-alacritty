@@ -1356,15 +1356,24 @@ impl AlacrittyEngine {
     /// slice of this input pushes up is kept in history. Then the rows past the limit are dropped
     /// and counted. Without this, the library drops the rows at the limit silently, and the absolute
     /// numbers of the screen rows and the scroll generation of inline images stop moving. One byte
-    /// cannot push up more rows than the screen has.
+    /// cannot push up more rows than the screen has. Only the primary screen keeps history: the
+    /// library creates the alternate grid without history, and the engine reaches only the grid of
+    /// the active screen, so it changes the limit only while the primary screen is active. A slice
+    /// that leaves the primary screen leaves its limit raised until the next count on it.
     fn advance(&mut self, bytes: &[u8]) {
         for slice in bytes.chunks(ADVANCE_SLICE_BYTES) {
-            self.term
-                .grid_mut()
-                .update_history(self.history_limit + COUNTED_ROWS);
+            if self.primary_screen() {
+                self.term
+                    .grid_mut()
+                    .update_history(self.history_limit + COUNTED_ROWS);
+            }
             self.processor.advance(&mut self.term, slice);
             self.count_pushed_rows();
         }
+    }
+
+    fn primary_screen(&self) -> bool {
+        !self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Reduces the history to the limit and counts the dropped rows. Changes the grid size. The
@@ -1410,6 +1419,9 @@ impl AlacrittyEngine {
     /// Counts the rows that the input pushed above the limit, and reports when more rows than the
     /// count covers may have passed, because the library drops those without a record.
     fn count_pushed_rows(&mut self) {
+        if !self.primary_screen() {
+            return;
+        }
         if self.term.grid().history_size() >= self.history_limit + COUNTED_ROWS {
             self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
                 "one input pushed {COUNTED_ROWS} or more rows above the history limit, so the row count may be low"
@@ -1418,7 +1430,12 @@ impl AlacrittyEngine {
         self.limit_history();
     }
 
+    /// Drops the rows of the primary history past the limit and counts them; the alternate screen
+    /// keeps no history.
     fn limit_history(&mut self) {
+        if !self.primary_screen() {
+            return;
+        }
         let excess = self
             .term
             .grid()
@@ -2022,7 +2039,7 @@ impl Engine for AlacrittyEngine {
             // At the same size the PTY sends no SIGWINCH, so the shell does not redraw either.
             return;
         }
-        let primary = !self.term.mode().contains(TermMode::ALT_SCREEN);
+        let primary = self.primary_screen();
         // The prompt leaves the reflow and returns after it, in the order of kitty
         // (core docs/spec/terminal-state.md#prompt-region).
         let held = match self.prompt_region_start() {
@@ -2228,9 +2245,11 @@ impl Engine for AlacrittyEngine {
     fn stop_sync(&mut self) {
         // The library processes the held bytes in one call, so the count covers them as it covers a
         // slice of a feed.
-        self.term
-            .grid_mut()
-            .update_history(self.history_limit + COUNTED_ROWS);
+        if self.primary_screen() {
+            self.term
+                .grid_mut()
+                .update_history(self.history_limit + COUNTED_ROWS);
+        }
         self.processor.stop_sync(&mut self.term);
         self.count_pushed_rows();
     }

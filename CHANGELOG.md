@@ -1,5 +1,6 @@
 # Changelog
 
+- S205-1: `scrollback.history` is the history of the active screen: the alternate screen keeps no history and reports `{offset: 0, history: 0}`, and the primary history returns unchanged when mode 1049 is reset; the engine no longer gives the alternate grid the history limit.
 - S202: `make repeat` runs the tests through the cargo-nextest runner of `make test`, each test in its own process, so the tests that measure the allocations or the footprint of their process measure only their own; it ran `cargo test`.
 - S201: The catalog test admits the JSON Schema type `integer`, which the catalog uses for `sequence` of `sidecar.alacritty.shell.state`, and the two emit sites of the guard name `sidecar.alacritty.guard.allow` and `sidecar.alacritty.guard.refuse` in an `events:` comment, so `sok-check events` passes.
 - S200: The comment language check reads `.bash` and `.zsh` files with the bash grammar, and the comments of `alacritty-core/src/shell-integration/bash-integration.bash` are English.
