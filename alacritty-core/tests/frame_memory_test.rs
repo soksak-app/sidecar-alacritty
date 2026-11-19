@@ -64,6 +64,7 @@ fn screen() -> Screen {
             preedit: None,
         },
         scrollback: Default::default(),
+        alternate: Default::default(),
         background: "#1e1e1e".to_string(),
         lines: (0..rows)
             .map(|_| {

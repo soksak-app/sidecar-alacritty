@@ -2510,7 +2510,9 @@ impl Engine for AlacrittyEngine {
             scrollback: soksak_sidecar_alacritty_core::Scrollback {
                 offset: offset as u32,
                 history: history as u32,
+                dropped: self.dropped as u64,
             },
+            alternate: AlacrittyEngine::alternate_rows(self),
             // The theme's default background applies when the program sets no background with OSC
             // 11.
             background: self.term.colors()[NamedColor::Background].map_or_else(

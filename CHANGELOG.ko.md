@@ -1,5 +1,6 @@
 # Changelog
 
+- S205-3: `view` 이벤트가 `scrollback.dropped` 와 `alternate {active, history, dropped}` 를 담고, session 의 각 출력 뒤에 사이드카가 PTY 의 foreground process group 의 leader 의 `{pid, command, cwd}` 가 바뀌면 이벤트 `foreground` 를 보낸다. core `docs/spec/terminal-read.md#session-state` 의 session 상태 member 다.
 - S206: engine 이 vt S192 처럼 synchronized update 의 출력을 scan 전에 스스로 보류하고 update 가 끝날 때 scan 한다. update 안의 engine erase 는 그 앞의 출력 뒤에 적용되고, update 안의 화면 전환은 slice 를 끝내므로 alternate screen 의 보존 행이 그것을 따르며, update 의 끝은 모든 행을 센다. 전에는 library 가 update 의 출력을 자기 handler 를 위해 보류하고 한 번의 호출로 처리했다.
 - S205-2: engine 이 scroll 로 alternate screen 의 위를 떠나는 행을 보존하고 core `docs/spec/terminal-read.md` 가 정하는 대로 `screen.read {screen: "alternate", from, count}` 로 읽는다. history 한도만큼까지 보존하고, 버릴 때마다 `buffer: "alternate rows"` 의 `sidecar.alacritty.buffer_dropped` 기록을 쓰며, program 이 screen 을 떠난 뒤에도 남기고 다음 진입에서 지운다. 범위 읽기에서 `screen` 은 필수이고, alternate screen 이 활성이면 `primary` 는 거절된다. Red: `terminal_read_test` 와 `row_screen_test` 가 바뀌지 않은 engine 에서 compile 되지 않았다. Green: 공유 case 여섯 개가 실제 engine 으로 통과한다.
 - S205-1: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.
