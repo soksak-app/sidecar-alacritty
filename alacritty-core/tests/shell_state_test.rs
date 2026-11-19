@@ -7,20 +7,36 @@ fn each_change_of_the_state_is_one_transition_numbered_from_one() {
     let mut tracker = ShellStateTracker::default();
     assert_eq!(
         tracker.apply("s1", ShellMarker::PromptStart),
-        Some(Transition { from: None, to: ShellState::Idle, sequence: 1 })
+        Some(Transition {
+            from: None,
+            to: ShellState::Idle,
+            sequence: 1
+        })
     );
     assert_eq!(tracker.apply("s1", ShellMarker::PromptEnd), None);
     assert_eq!(
         tracker.apply("s1", ShellMarker::CommandStart),
-        Some(Transition { from: Some(ShellState::Idle), to: ShellState::Running, sequence: 2 })
+        Some(Transition {
+            from: Some(ShellState::Idle),
+            to: ShellState::Running,
+            sequence: 2
+        })
     );
     assert_eq!(
         tracker.apply("s1", ShellMarker::CommandFinished),
-        Some(Transition { from: Some(ShellState::Running), to: ShellState::Exited, sequence: 3 })
+        Some(Transition {
+            from: Some(ShellState::Running),
+            to: ShellState::Exited,
+            sequence: 3
+        })
     );
     assert_eq!(
         tracker.apply("s1", ShellMarker::PromptStart),
-        Some(Transition { from: Some(ShellState::Exited), to: ShellState::Idle, sequence: 4 })
+        Some(Transition {
+            from: Some(ShellState::Exited),
+            to: ShellState::Idle,
+            sequence: 4
+        })
     );
 }
 
@@ -30,7 +46,11 @@ fn a_session_that_differs_from_the_tracked_one_starts_a_new_state() {
     tracker.apply("s1", ShellMarker::CommandStart);
     assert_eq!(
         tracker.apply("s2", ShellMarker::PromptStart),
-        Some(Transition { from: None, to: ShellState::Idle, sequence: 1 })
+        Some(Transition {
+            from: None,
+            to: ShellState::Idle,
+            sequence: 1
+        })
     );
 }
 

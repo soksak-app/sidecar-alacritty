@@ -43,8 +43,14 @@ pub struct Verdict {
 /// The answer to a dialog: the index of the option to select, or the reason to cancel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
-    Answer { option: usize, verdict: Verdict },
-    Cancel { reason: CancelReason, verdict: Verdict },
+    Answer {
+        option: usize,
+        verdict: Verdict,
+    },
+    Cancel {
+        reason: CancelReason,
+        verdict: Verdict,
+    },
 }
 
 /// A declared pattern: the text that matches it is compared in lowercase ASCII.
@@ -56,47 +62,155 @@ struct Pattern {
 /// Patterns of destructive dialogs. A dialog that matches one is cancelled, so the list errs toward
 /// matching: a false match cancels a dialog, and a missed match would answer a destructive one.
 const DESTRUCTIVE: &[Pattern] = &[
-    Pattern { id: "destructive.delete", needle: "delete" },
-    Pattern { id: "destructive.remove", needle: "remove" },
-    Pattern { id: "destructive.rm", needle: "rm -" },
-    Pattern { id: "destructive.overwrite", needle: "overwrit" },
-    Pattern { id: "destructive.discard", needle: "discard" },
-    Pattern { id: "destructive.uncommitted", needle: "reset --hard" },
-    Pattern { id: "destructive.uncommitted", needle: "git clean" },
-    Pattern { id: "destructive.uncommitted", needle: "checkout --" },
-    Pattern { id: "destructive.history", needle: "rebase" },
-    Pattern { id: "destructive.history", needle: "amend" },
-    Pattern { id: "destructive.history", needle: "filter-branch" },
-    Pattern { id: "destructive.history", needle: "filter-repo" },
-    Pattern { id: "destructive.force-push", needle: "force" },
-    Pattern { id: "destructive.credential", needle: "credential" },
-    Pattern { id: "destructive.credential", needle: "password" },
-    Pattern { id: "destructive.credential", needle: "token" },
-    Pattern { id: "destructive.credential", needle: "secret" },
-    Pattern { id: "destructive.permission", needle: "permission" },
-    Pattern { id: "destructive.permission", needle: "chmod" },
-    Pattern { id: "destructive.permission", needle: "chown" },
-    Pattern { id: "destructive.permission", needle: "sudo" },
-    Pattern { id: "destructive.process", needle: "kill" },
-    Pattern { id: "destructive.process", needle: "terminate" },
-    Pattern { id: "destructive.external-write", needle: "upload" },
-    Pattern { id: "destructive.external-write", needle: "publish" },
-    Pattern { id: "destructive.external-write", needle: "push" },
-    Pattern { id: "destructive.external-write", needle: "send to" },
-    Pattern { id: "destructive.external-write", needle: "post to" },
+    Pattern {
+        id: "destructive.delete",
+        needle: "delete",
+    },
+    Pattern {
+        id: "destructive.remove",
+        needle: "remove",
+    },
+    Pattern {
+        id: "destructive.rm",
+        needle: "rm -",
+    },
+    Pattern {
+        id: "destructive.overwrite",
+        needle: "overwrit",
+    },
+    Pattern {
+        id: "destructive.discard",
+        needle: "discard",
+    },
+    Pattern {
+        id: "destructive.uncommitted",
+        needle: "reset --hard",
+    },
+    Pattern {
+        id: "destructive.uncommitted",
+        needle: "git clean",
+    },
+    Pattern {
+        id: "destructive.uncommitted",
+        needle: "checkout --",
+    },
+    Pattern {
+        id: "destructive.history",
+        needle: "rebase",
+    },
+    Pattern {
+        id: "destructive.history",
+        needle: "amend",
+    },
+    Pattern {
+        id: "destructive.history",
+        needle: "filter-branch",
+    },
+    Pattern {
+        id: "destructive.history",
+        needle: "filter-repo",
+    },
+    Pattern {
+        id: "destructive.force-push",
+        needle: "force",
+    },
+    Pattern {
+        id: "destructive.credential",
+        needle: "credential",
+    },
+    Pattern {
+        id: "destructive.credential",
+        needle: "password",
+    },
+    Pattern {
+        id: "destructive.credential",
+        needle: "token",
+    },
+    Pattern {
+        id: "destructive.credential",
+        needle: "secret",
+    },
+    Pattern {
+        id: "destructive.permission",
+        needle: "permission",
+    },
+    Pattern {
+        id: "destructive.permission",
+        needle: "chmod",
+    },
+    Pattern {
+        id: "destructive.permission",
+        needle: "chown",
+    },
+    Pattern {
+        id: "destructive.permission",
+        needle: "sudo",
+    },
+    Pattern {
+        id: "destructive.process",
+        needle: "kill",
+    },
+    Pattern {
+        id: "destructive.process",
+        needle: "terminate",
+    },
+    Pattern {
+        id: "destructive.external-write",
+        needle: "upload",
+    },
+    Pattern {
+        id: "destructive.external-write",
+        needle: "publish",
+    },
+    Pattern {
+        id: "destructive.external-write",
+        needle: "push",
+    },
+    Pattern {
+        id: "destructive.external-write",
+        needle: "send to",
+    },
+    Pattern {
+        id: "destructive.external-write",
+        needle: "post to",
+    },
 ];
 
 /// Patterns of dialogs that are reversible and scoped to the project. A dialog that matches one and
 /// has an accepting option is answered.
 const SAFE: &[Pattern] = &[
-    Pattern { id: "safe.run-tests", needle: "run the tests" },
-    Pattern { id: "safe.run-tests", needle: "npm test" },
-    Pattern { id: "safe.run-tests", needle: "pnpm test" },
-    Pattern { id: "safe.run-tests", needle: "cargo test" },
-    Pattern { id: "safe.run-tests", needle: "go test" },
-    Pattern { id: "safe.read-project-file", needle: "read the file" },
-    Pattern { id: "safe.read-project-file", needle: "reading file" },
-    Pattern { id: "safe.continue-paused-turn", needle: "paused turn" },
+    Pattern {
+        id: "safe.run-tests",
+        needle: "run the tests",
+    },
+    Pattern {
+        id: "safe.run-tests",
+        needle: "npm test",
+    },
+    Pattern {
+        id: "safe.run-tests",
+        needle: "pnpm test",
+    },
+    Pattern {
+        id: "safe.run-tests",
+        needle: "cargo test",
+    },
+    Pattern {
+        id: "safe.run-tests",
+        needle: "go test",
+    },
+    Pattern {
+        id: "safe.read-project-file",
+        needle: "read the file",
+    },
+    Pattern {
+        id: "safe.read-project-file",
+        needle: "reading file",
+    },
+    Pattern {
+        id: "safe.continue-paused-turn",
+        needle: "paused turn",
+    },
 ];
 
 /// Label prefixes of an option that accepts a dialog.
@@ -111,7 +225,9 @@ fn first_match(patterns: &'static [Pattern], haystack: &str) -> Option<&'static 
 
 fn accepts(option: &DialogOption) -> bool {
     let label = option.label.trim().to_ascii_lowercase();
-    ACCEPT_PREFIXES.iter().any(|prefix| label.starts_with(prefix))
+    ACCEPT_PREFIXES
+        .iter()
+        .any(|prefix| label.starts_with(prefix))
 }
 
 /// Decides the answer to a dialog. The dialog text and every option label are matched, so an option

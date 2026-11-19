@@ -60,6 +60,10 @@ impl ShellStateTracker {
         }
         let from = self.state.replace(to);
         self.sequence += 1;
-        Some(Transition { from, to, sequence: self.sequence })
+        Some(Transition {
+            from,
+            to,
+            sequence: self.sequence,
+        })
     }
 }

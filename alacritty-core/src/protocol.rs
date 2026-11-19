@@ -1,10 +1,10 @@
 use crate::encoding::{self, Key};
 use crate::events::{Events, Level, Subject};
 use crate::guard::{self, LineInput};
-use crate::shell_state;
 use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::policy::Class;
 use crate::screen_stream::{ScreenCells, ScreenOrder, ScreenStream, SentScreen, screen_cells};
+use crate::shell_state;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -1468,7 +1468,9 @@ fn line_key(key: &InputKey) -> LineInput<'_> {
         "Enter" | "KeypadEnter" if plain => LineInput::Enter,
         "Backspace" if plain => LineInput::Backspace,
         "Char" if plain => LineInput::Text(key.text.as_str()),
-        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => LineInput::Discard,
+        "Char" if key.ctrl && !key.alt && (key.text == "c" || key.text == "u") => {
+            LineInput::Discard
+        }
         _ if plain && !key.text.is_empty() => LineInput::Text(key.text.as_str()),
         "Keypad0" if plain => LineInput::Text("0"),
         "Keypad1" if plain => LineInput::Text("1"),
@@ -1751,9 +1753,8 @@ fn parse_screen_read_rows(body: &Value) -> Result<Option<ScreenRowRange>, String
             let from = from
                 .as_u64()
                 .ok_or("screen.read from must be a non-negative integer")?;
-            let count_error = || {
-                format!("screen.read count must be an integer from 1 to {MAX_SCREEN_ROWS_READ}")
-            };
+            let count_error =
+                || format!("screen.read count must be an integer from 1 to {MAX_SCREEN_ROWS_READ}");
             let count = count.as_u64().ok_or_else(count_error)?;
             let count = u32::try_from(count).map_err(|_| count_error())?;
             if !(1..=MAX_SCREEN_ROWS_READ).contains(&count) {
