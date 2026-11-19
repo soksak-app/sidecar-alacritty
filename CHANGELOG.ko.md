@@ -1,5 +1,6 @@
 # Changelog
 
+- S190: 변화 event `shell.state`와 log event `sidecar.alacritty.shell.state`가 `exited`의 exit code `exit`를 가진다(core `docs/spec/terminal-state.md`). engine은 첫 parameter가 named parameter도 0부터 255까지의 정수도 아닌 `D`를 거부하며, `shell.state.read`는 `shell.state.current`로 답한다. core의 공유 case가 실제 engine과 실제 session으로 통과하며, 변경하지 않은 sidecar에서 event에는 `exit`가 없었다.
 - S115: 뷰의 위나 아래 가장자리를 넘는 텍스트 선택 드래그가 기록을 스크롤한다. `selection.update`가 `overflow`를 받고, 0이 아닌 overflow는 선택을 넓히기 전에 주 뷰포트를 보존된 기록 안에서 `ceil(|overflow| / cell height)`행 옮긴다. 바뀌지 않은 갱신과 보고되는 마우스 제스처는 아무것도 옮기지 않는다. Red: drag test가 뷰포트 이동 없이 실패했다. Green: 통과한다.
 - S114: `view` 이벤트가 그 frame의 기본 배경인 `background`를 담고, 기본 배경이 바뀐 frame은 `view` 이벤트를 보낸다. Red: 테마와 OSC 11 view test가 실패했다. Green: 통과한다.
 - S113: one-shot `screen.observe` 요청과 `screen.observed` 응답, 그 오류를 제거하고 strip renderer는 다시 render metadata를 수집하지 않는다. `screen.read`·`screen.watch`·leased image target·content-keyed strip 저장소·frame identity는 유지한다.
