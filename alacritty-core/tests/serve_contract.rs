@@ -13,8 +13,8 @@ use soksak_sidecar_alacritty_core::platform::darwin::frame::{Frame, metrics};
 /// Serve contract integration tests that use a fake daemon
 use soksak_sidecar_alacritty_core::protocol::{
     Cell, Cursor, CursorShape, DaemonEvent, Engine, EngineEvent, Modes, OutputSubmissionObserver,
-    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellMarker, ShellRequest,
-    serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
+    OutputSubmissionStage, PersistentOwner, PersistentRegistry, Screen, SessionPort, ShellMarker,
+    ShellRequest, serve as serve_with_events, serve_with_registry, serve_with_submission_observer,
 };
 use soksak_sidecar_alacritty_core::pty::PtyMeasurement;
 use soksak_sidecar_alacritty_core::{
@@ -152,7 +152,9 @@ impl Engine for MockEngine {
                 label
                     .chars()
                     .map(|ch| Cell {
-                        ch: Some(compact_str::CompactString::from(&*ch.encode_utf8(&mut [0; 4]))),
+                        ch: Some(compact_str::CompactString::from(
+                            &*ch.encode_utf8(&mut [0; 4]),
+                        )),
                         width: 1,
                         ..Default::default()
                     })

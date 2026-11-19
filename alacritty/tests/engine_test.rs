@@ -2588,6 +2588,10 @@ fn shell_marks_are_drained_as_events_in_the_order_they_arrive() {
         .collect();
     assert_eq!(
         marks,
-        vec![ShellMarker::PromptStart, ShellMarker::CommandStart, ShellMarker::CommandFinished]
+        vec![
+            ShellMarker::PromptStart,
+            ShellMarker::CommandStart,
+            ShellMarker::CommandFinished
+        ]
     );
 }
