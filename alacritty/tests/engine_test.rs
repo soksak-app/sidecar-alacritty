@@ -2437,7 +2437,7 @@ fn an_inline_image_after_the_history_limit_counts_the_rows_that_the_limit_droppe
 }
 
 // A synchronized update (DEC 2026) holds the output after its opening sequence until the update
-// ends. The library sets the deadline of the update 150 ms after the opening sequence, and the
+// ends. The engine sets the deadline of the update 150 ms after the opening sequence, and the
 // caller ends the update with `stop_sync` at that deadline.
 #[test]
 fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
@@ -2463,6 +2463,44 @@ fn a_synchronized_update_holds_output_until_stop_sync_ends_it() {
         "stop_sync did not process the output of the held update"
     );
     assert!(engine.sync_deadline().is_none());
+}
+
+// A closing sequence cut between two outputs ends the held update, and each update of one output ends at its own
+// closing sequence, so the output between two updates is drawn and the second update holds its output.
+#[test]
+fn each_synchronized_update_ends_at_its_closing_sequence() {
+    let mut engine = AlacrittyEngine::new();
+    engine.feed(b"\x1b[?2026hfirst\x1b[?20");
+    assert!(!text(&engine.screen()).contains("first"));
+    engine.feed(b"26lbetween\x1b[?2026hsecond\x1b[?2026lthird\x1b[?2026hfourth");
+    let screen = text(&engine.screen());
+    assert!(
+        screen.contains("firstbetweensecondthird") && !screen.contains("fourth"),
+        "{screen:?}"
+    );
+    assert!(engine.sync_deadline().is_some());
+    engine.stop_sync();
+    assert!(text(&engine.screen()).contains("thirdfourth"));
+    assert!(engine.sync_deadline().is_none());
+}
+
+// An erase of the engine inside a synchronized update applies after the output before it in the update, so the output
+// that the erase removes stays removed when the update ends.
+#[test]
+fn an_erase_inside_a_synchronized_update_follows_the_output_before_it() {
+    for erase in [&b"\x1b[2J"[..], b"\x1b[1J"] {
+        let mut engine = AlacrittyEngine::new();
+        let mut output = b"\x1b[?2026hbefore".to_vec();
+        output.extend(erase);
+        output.extend(b"\x1b[2;1Hafter\x1b[?2026l");
+        engine.feed(&output);
+        let screen = text(&engine.screen());
+        assert!(
+            !screen.contains("before") && screen.contains("after"),
+            "erase {:?} inside the update left the screen {screen:?}",
+            String::from_utf8_lossy(erase)
+        );
+    }
 }
 
 #[test]
