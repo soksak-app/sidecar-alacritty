@@ -1,6 +1,7 @@
 # Changelog
 
 - S191: The sources and tests of the guard and the shell state are formatted with rustfmt, so `cargo fmt --all --check` of `make test` passes on main. Red: the check reported 38 differences in 9 files. Green: it exits 0.
+- S190: The change event `shell.state` and the log event `sidecar.alacritty.shell.state` carry `exit`, the exit code of `exited` (core `docs/spec/terminal-state.md`); the engine rejects a `D` whose first parameter is neither a named parameter nor an integer from 0 to 255; `shell.state.read` answers `shell.state.current`. The shared cases of core pass through the real engine and a real session; on the unchanged sidecar the events had no `exit`.
 - S118: The `screen.read` request takes `from` and `count` and returns retained rows above the viewport, numbered by the absolute line numbers; the reply is the event `screen.rows`.
 - S117: A dim cell draws its foreground blended toward its background, and the screen hash covers the dim attribute.
 - S115: A text selection drag past the top or the bottom edge of the view scrolls the history: `selection.update` takes `overflow`, and a nonzero overflow moves the primary viewport by `ceil(|overflow| / cell height)` rows within the retained history before the selection extends; an unchanged update and a reported mouse gesture move nothing. Red: the drag tests failed with no viewport move. Green: they pass.

@@ -1306,6 +1306,8 @@ struct Envelope {
 /// Commands sent to the surface action
 #[derive(Debug)]
 enum SurfaceCommand {
+    /// Reads the terminal state of the session (core docs/spec/terminal-state.md#state-read).
+    ShellStateRead,
     Open {
         image: Option<String>,
         request: ShellRequest,
@@ -3425,28 +3427,38 @@ async fn send_engine_events(
                 }
             }
             EngineEvent::ShellState { marker, params } => {
-                // The tracker follows the marks of every output, so the state is kept while no event is emitted.
-                if let Some(session) = session_id
-                    && let Some(transition) = shell_state.apply(session, marker)
-                {
-                    let from = transition.from.map(|state| state.name());
-                    log.emit_for(
-                        Level::Info,
-                        "sidecar.alacritty.shell.state",
-                        Subject::session(session, &[]),
-                        &json!({"from": from, "to": transition.to.name(), "source": "osc133", "sequence": transition.sequence}),
-                    );
-                    if emit_surface_events {
-                        let response = json!({"surface": surface_id, "body": {
-                            "event": "shell.state",
-                            "from": from,
-                            "to": transition.to.name(),
-                            "source": "osc133",
-                            "sequence": transition.sequence,
-                        }});
-                        if output_tx.send(response.to_string()).await.is_err() {
-                            return false;
+                // The tracker follows the marks of every output, so the state stays current while no event is sent
+                // (core docs/spec/terminal-state.md#change-event).
+                if let Some(session) = session_id {
+                    match shell_state.apply(session, marker, &params) {
+                        Ok(Some(transition)) => {
+                            let from = transition.from.map(|state| state.name());
+                            let fields = json!({
+                                "from": from,
+                                "to": transition.to.name(),
+                                "source": shell_state::SOURCE_OSC133,
+                                "sequence": transition.sequence,
+                                "exit": transition.exit,
+                            });
+                            log.emit_for(
+                                Level::Info,
+                                "sidecar.alacritty.shell.state",
+                                Subject::session(session, &[]),
+                                &fields,
+                            );
+                            if emit_surface_events {
+                                let mut body = fields;
+                                body["event"] = Value::from("shell.state");
+                                let response = json!({"surface": surface_id, "body": body});
+                                if output_tx.send(response.to_string()).await.is_err() {
+                                    return false;
+                                }
+                            }
                         }
+                        Ok(None) => {}
+                        // The engine rejects a malformed exit code before it gives the mark, so this is an error of the
+                        // engine, which is reported and changes no state.
+                        Err(reason) => log.record_error("shell state", reason),
                     }
                 }
                 if !emit_surface_events {
@@ -4607,6 +4619,22 @@ async fn surface_task(
                     // the reader has read, then answers. It is a diagnostic observation that
                     // distinguishes a successful write, the child's receipt, and the child's
                     // output.
+                    SurfaceCommand::ShellStateRead => {
+                        let response = match session_id.as_deref() {
+                            Some(session) => {
+                                let current = shell_state.current(session);
+                                json!({"surface": surface_id, "body": {
+                                    "event": "shell.state.current",
+                                    "state": current.state.map(|state| state.name()),
+                                    "source": current.state.map(|_| shell_state::SOURCE_OSC133),
+                                    "sequence": current.sequence,
+                                    "exit": current.exit,
+                                }})
+                            }
+                            None => json!({"surface": surface_id, "body": {"error": "Session not open", "request": {"operation": "shell.state.read"}}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::PtyPending => {
                         // An error reply also carries the same event marker. The reply alone must
                         // show that it answers a measurement request.
@@ -6207,6 +6235,11 @@ where
                                     .await
                                     .is_err()
                                 {
+                                    break;
+                                }
+                            }
+                            "shell.state.read" => {
+                                if tx.send(SurfaceCommand::ShellStateRead).await.is_err() {
                                     break;
                                 }
                             }
