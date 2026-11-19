@@ -8719,7 +8719,8 @@ async fn a_row_range_screen_read_replies_with_the_screen_rows_event_of_the_contr
 // Messaging contract (core docs/spec/messaging.md). The folder watch and the message operations run on the
 // persistent transport, so each test starts the serve loop with a persistent owner. Every wait below ends on
 // its event: a reply line with the cids of its request, a file event line, or an error line. No test uses a
-// timer; the repository limit of .config/nextest.toml is the only time limit.
+// timer; the repository limit of .config/nextest.toml is the only time limit. A message is written as a writer
+// must write it: under a temporary name that does not end in `.txt`, then renamed to `<from>.<token>.txt`.
 
 /// Starts the serve loop with a persistent owner and returns the input of the caller, the output lines and the
 /// task of the loop. No session is opened, so the session port is not called.
@@ -8731,13 +8732,15 @@ fn start_messaging_service() -> (
     let (to_serve, serve_in) = tokio::io::duplex(1 << 20);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
     let engine_factory = Arc::new(|| Box::new(MockEngine::new()) as Box<dyn Engine>);
-    let port: Arc<dyn SessionPort> = Arc::new(soksak_sidecar_alacritty_core::LocalSessionPort::new_with_owner(
-        Arc::new(soksak_sidecar_alacritty_core::pty::PtyService::new(
-            events_test::TestEvents::new().handle(),
-        )),
-        String::new(),
-    ));
-    let factory = Arc::new(move || port.clone());
+    // Each surface task takes the events of its own session port, so each surface gets a new port.
+    let factory = Arc::new(|| {
+        Arc::new(soksak_sidecar_alacritty_core::LocalSessionPort::new_with_owner(
+            Arc::new(soksak_sidecar_alacritty_core::pty::PtyService::new(
+                events_test::TestEvents::new().handle(),
+            )),
+            String::new(),
+        )) as Arc<dyn SessionPort>
+    });
     let owner = PersistentOwner {
         close: Arc::new(|| Ok(())),
         registry: PersistentRegistry::new(),
@@ -8815,25 +8818,80 @@ async fn register_messaging_folder(
     messaging_reply(lines, cid).await
 }
 
+/// Reads the messages of `surface` after `after` with the cursor epoch `registration`.
+async fn read_messages(
+    to_serve: &mut tokio::io::DuplexStream,
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    surface: &str,
+    cid: &str,
+    after: u64,
+    registration: &serde_json::Value,
+) -> serde_json::Value {
+    send_messaging_request(
+        to_serve,
+        surface,
+        cid,
+        serde_json::json!({"operation": "messages.read", "after": after, "registration": registration}),
+    )
+    .await;
+    messaging_reply(lines, cid).await
+}
+
+/// Writes `text` as the message `<from>.<token>.txt` through the temporary name `.tmp-<token>` and a rename, and
+/// returns the name of the message.
+fn write_message(folder: &std::path::Path, from: &str, token: &str, text: &[u8]) -> String {
+    let temporary = folder.join(format!(".tmp-{token}"));
+    std::fs::write(&temporary, text).expect("the temporary file must be written");
+    let name = format!("{from}.{token}.txt");
+    std::fs::rename(&temporary, folder.join(&name)).expect("the message must be renamed");
+    name
+}
+
+/// Reads the next file event of the message `name` of the kind `kind`.
+async fn file_event(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    name: &str,
+    kind: &str,
+) -> serde_json::Value {
+    next_line_where(lines, |value| {
+        value["body"]["event"] == "file.changed"
+            && value["body"]["path"] == name
+            && value["body"]["kind"] == kind
+    })
+    .await
+}
+
 /// Covers core docs/spec/messaging.md#registered-folder: the registration of an existing folder replies with
-/// `{registration, folder}`.
+/// `{registration, folder}`, a repeated registration replies the same, and a second surface or a second folder is
+/// refused with `already-registered`.
 #[tokio::test]
 async fn messages_register_replies_with_the_registration_and_the_folder() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let other = tempfile::tempdir().expect("temporary directory must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
     let reply =
         register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
     assert!(reply["body"].get("error").is_none(), "{reply}");
-    assert!(!reply["body"]["registration"].is_null(), "{reply}");
+    assert!(reply["body"]["registration"].is_string(), "{reply}");
     assert_eq!(
         reply["body"]["folder"],
         dir.path().to_str().expect("folder path is UTF-8"),
         "{reply}"
     );
+    let again =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "again", dir.path()).await;
+    assert_eq!(again["body"], reply["body"], "a repeated registration changed the reply");
+    let taken =
+        register_messaging_folder(&mut to_serve, &mut lines, "s2", "taken", dir.path()).await;
+    assert_eq!(taken["body"]["error"], "already-registered", "{taken}");
+    let second =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "second", other.path()).await;
+    assert_eq!(second["body"]["error"], "already-registered", "{second}");
 }
 
 /// Covers core docs/spec/messaging.md#registered-folder and #missing-folder: a folder that does not exist fails
-/// with `folder-missing`, and a path that is a file fails with `not-a-directory`.
+/// with `folder-missing`, a path that is a file fails with `not-a-directory`, and a relative path fails with
+/// `invalidParams`.
 #[tokio::test]
 async fn messages_register_refuses_a_missing_folder_and_a_file() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
@@ -8848,27 +8906,95 @@ async fn messages_register_refuses_a_missing_folder_and_a_file() {
 
     let file_reply = register_messaging_folder(&mut to_serve, &mut lines, "s1", "file", &file).await;
     assert_eq!(file_reply["body"]["error"], "not-a-directory", "{file_reply}");
+
+    let relative = register_messaging_folder(
+        &mut to_serve,
+        &mut lines,
+        "s1",
+        "relative",
+        std::path::Path::new("relative/folder"),
+    )
+    .await;
+    assert_eq!(relative["body"]["error"], "invalidParams", "{relative}");
 }
 
-/// Covers core docs/spec/messaging.md#file-event: a file created in the registered folder produces the event
-/// `sidecar.alacritty.file.changed` with `registration`, `path` (relative to the folder), `kind` and `seq`.
+/// Covers core docs/spec/messaging.md#file-event and F909: a message renamed into the registered folder produces
+/// the event `file.changed` with `registration`, `path` (relative to the folder), `from` (the sender of the name),
+/// `kind` and `seq`, and the temporary name produces no event (F911).
 #[tokio::test]
-async fn a_file_created_in_the_registered_folder_produces_a_file_changed_event() {
+async fn a_message_renamed_into_the_registered_folder_produces_one_created_event_with_its_sender() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
     let registered =
         register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
     let registration = registered["body"]["registration"].clone();
 
-    std::fs::write(dir.path().join("note.txt"), "hello").expect("file must be written");
-    let event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed" && value["body"]["path"] == "note.txt"
-    })
-    .await;
+    let name = write_message(dir.path(), "sender", "a1", b"hello");
+    let event = next_line_where(&mut lines, |value| value["body"]["event"] == "file.changed").await;
+    assert_eq!(event["surface"], "s1", "{event}");
     assert_eq!(event["body"]["registration"], registration, "{event}");
-    assert_eq!(event["body"]["path"], "note.txt", "{event}");
+    assert_eq!(event["body"]["path"], name.as_str(), "the first event is not the renamed message: {event}");
+    assert_eq!(event["body"]["from"], "sender", "{event}");
     assert_eq!(event["body"]["kind"], "created", "{event}");
-    assert!(event["body"]["seq"].is_u64(), "{event}");
+    assert_eq!(event["body"]["seq"], 1, "{event}");
+
+    let read = read_messages(&mut to_serve, &mut lines, "s1", "read", 0, &registration).await;
+    assert_eq!(
+        read["body"]["messages"],
+        serde_json::json!([{"seq": 1, "path": name, "text": "hello", "from": "sender"}]),
+        "{read}"
+    );
+    assert_eq!(read["body"]["last"], 1, "the temporary name produced an event: {read}");
+}
+
+/// Covers core docs/spec/messaging.md#message and F911: a message written in several steps under its temporary
+/// name is read whole after its rename.
+#[tokio::test]
+async fn a_message_written_in_steps_before_its_rename_is_read_whole() {
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
+
+    let temporary = dir.path().join(".tmp-steps");
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&temporary).expect("the temporary file must be created");
+        file.write_all(b"first ").expect("the first part must be written");
+        file.sync_all().expect("the first part must reach the file");
+        file.write_all(b"second").expect("the second part must be written");
+    }
+    std::fs::rename(&temporary, dir.path().join("sender.steps.txt")).expect("the message must be renamed");
+    let event = next_line_where(&mut lines, |value| value["body"]["event"] == "file.changed").await;
+    assert_eq!(event["body"]["path"], "sender.steps.txt", "{event}");
+    assert_eq!(event["body"]["kind"], "created", "{event}");
+    let read = read_messages(&mut to_serve, &mut lines, "s1", "read", 0, &registration).await;
+    assert_eq!(read["body"]["messages"][0]["text"], "first second", "{read}");
+}
+
+/// Covers core docs/spec/messaging.md#message and F909: a `.txt` file whose name gives no sender produces no event
+/// and is refused by `messages.read` with `invalid-sender`, which names the path.
+#[tokio::test]
+async fn a_message_without_a_sender_is_refused_with_invalid_sender() {
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
+
+    let temporary = dir.path().join(".tmp-note");
+    std::fs::write(&temporary, "no sender").expect("file must be written");
+    std::fs::rename(&temporary, dir.path().join("note.txt")).expect("file must be renamed");
+    let reply = read_messages(&mut to_serve, &mut lines, "s1", "read", 0, &registration).await;
+    assert_eq!(reply["body"]["error"], "invalid-sender", "{reply}");
+    assert!(reply["body"]["reason"].as_str().is_some_and(|reason| reason.ends_with("note.txt")), "{reply}");
+
+    // The next event names the message with a sender; the file without a sender produced none before it.
+    let name = write_message(dir.path(), "sender", "b2", b"with sender");
+    let event = next_line_where(&mut lines, |value| value["body"]["event"] == "file.changed").await;
+    assert_eq!(event["body"]["path"], name.as_str(), "{event}");
+    assert_eq!(event["body"]["seq"], 1, "{event}");
 }
 
 /// Covers core docs/spec/messaging.md#file-event: `seq` counts per registration and starts at 1 for each
@@ -8881,144 +9007,140 @@ async fn seq_counts_from_one_for_each_registration_in_one_process() {
     let first =
         register_messaging_folder(&mut to_serve, &mut lines, "s1", "first", first_dir.path()).await;
     let second =
-        register_messaging_folder(&mut to_serve, &mut lines, "s1", "second", second_dir.path()).await;
+        register_messaging_folder(&mut to_serve, &mut lines, "s2", "second", second_dir.path()).await;
     let first_registration = first["body"]["registration"].clone();
     let second_registration = second["body"]["registration"].clone();
+    assert_ne!(first_registration, second_registration);
 
-    std::fs::write(first_dir.path().join("a.txt"), "a").expect("file must be written");
-    let first_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "a.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
+    let a = write_message(first_dir.path(), "x", "a", b"a");
+    let first_event = file_event(&mut lines, &a, "created").await;
     assert_eq!(first_event["body"]["registration"], first_registration, "{first_event}");
     assert_eq!(first_event["body"]["seq"], 1, "{first_event}");
 
-    std::fs::write(first_dir.path().join("b.txt"), "b").expect("file must be written");
-    let second_file_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "b.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
-    assert_eq!(second_file_event["body"]["registration"], first_registration, "{second_file_event}");
-    let first_seq = first_event["body"]["seq"].as_u64().expect("seq is an integer");
-    let second_seq = second_file_event["body"]["seq"].as_u64().expect("seq is an integer");
-    assert!(second_seq > first_seq, "seq does not increase: {first_event} {second_file_event}");
+    let b = write_message(first_dir.path(), "x", "b", b"b");
+    let second_file_event = file_event(&mut lines, &b, "created").await;
+    assert_eq!(second_file_event["body"]["seq"], 2, "{second_file_event}");
 
-    std::fs::write(second_dir.path().join("c.txt"), "c").expect("file must be written");
-    let other_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "c.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
+    let c = write_message(second_dir.path(), "x", "c", b"c");
+    let other_event = file_event(&mut lines, &c, "created").await;
+    assert_eq!(other_event["surface"], "s2", "{other_event}");
     assert_eq!(other_event["body"]["registration"], second_registration, "{other_event}");
     assert_eq!(other_event["body"]["seq"], 1, "{other_event}");
 }
 
-/// Covers core docs/spec/messaging.md#message: a message file over 64 KiB is refused by `messages.read` with
-/// `message-too-large`, which names the path, and no message of the reply is delivered.
+/// Covers core docs/spec/messaging.md#message: a message file of 65537 bytes is refused by `messages.read` with
+/// `message-too-large`, which names the path, and one of 65536 bytes is read.
 #[tokio::test]
 async fn a_message_file_over_the_size_limit_is_refused_by_messages_read() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
-    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
 
-    let oversized = vec![b'a'; 64 * 1024 + 1];
-    std::fs::write(dir.path().join("big.txt"), &oversized).expect("file must be written");
-    next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "big.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
+    let limit = write_message(dir.path(), "x", "limit", &vec![b'a'; 64 * 1024]);
+    file_event(&mut lines, &limit, "created").await;
+    let read = read_messages(&mut to_serve, &mut lines, "s1", "limit", 0, &registration).await;
+    assert_eq!(read["body"]["messages"][0]["text"].as_str().map(str::len), Some(64 * 1024), "{read}");
 
-    send_messaging_request(
-        &mut to_serve,
-        "s1",
-        "read",
-        serde_json::json!({"operation": "messages.read", "after": 0}),
-    )
-    .await;
-    let reply = messaging_reply(&mut lines, "read").await;
+    let big = write_message(dir.path(), "x", "big", &vec![b'a'; 64 * 1024 + 1]);
+    file_event(&mut lines, &big, "created").await;
+    let reply = read_messages(&mut to_serve, &mut lines, "s1", "read", 0, &registration).await;
     assert_eq!(reply["body"]["error"], "message-too-large", "{reply}");
     assert!(reply["body"].get("messages").is_none(), "{reply}");
-    assert!(reply.to_string().contains("big.txt"), "the refusal does not name the path: {reply}");
+    assert!(reply.to_string().contains(&big), "the refusal does not name the path: {reply}");
 }
 
 /// Covers core docs/spec/messaging.md#message and #mcp-tools: `messages.read` returns the messages with a
-/// sequence number greater than `after` in increasing order, and a repeated read with the same `after` returns
-/// the same result while the folder does not change.
+/// sequence number greater than `after` in increasing order, a repeated read with the same `after` returns the same
+/// result while the folder does not change, and a removed message is no message of a read.
 #[tokio::test]
 async fn messages_read_returns_messages_after_the_given_seq_and_repeats_the_same_result() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
-    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
 
-    std::fs::write(dir.path().join("one.txt"), "one").expect("file must be written");
-    let first_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "one.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
-    let first_seq = first_event["body"]["seq"].as_u64().expect("seq is an integer");
+    let one = write_message(dir.path(), "x", "one", b"one");
+    file_event(&mut lines, &one, "created").await;
+    let two = write_message(dir.path(), "x", "two", b"two");
+    file_event(&mut lines, &two, "created").await;
 
-    std::fs::write(dir.path().join("two.txt"), "two").expect("file must be written");
-    let second_event = next_line_where(&mut lines, |value| {
-        value["body"]["event"] == "file.changed"
-            && value["body"]["path"] == "two.txt"
-            && value["body"]["kind"] == "created"
-    })
-    .await;
-    let second_seq = second_event["body"]["seq"].as_u64().expect("seq is an integer");
-    assert!(second_seq > first_seq, "{first_event} {second_event}");
-
-    send_messaging_request(
-        &mut to_serve,
-        "s1",
-        "all",
-        serde_json::json!({"operation": "messages.read", "after": 0}),
-    )
-    .await;
-    let all = messaging_reply(&mut lines, "all").await;
-    assert!(all["body"].get("error").is_none(), "{all}");
-    let messages = all["body"]["messages"].as_array().expect("messages is an array");
-    assert!(
-        messages.iter().any(|m| m["seq"] == first_seq && m["path"] == "one.txt" && m["text"] == "one"),
+    let all = read_messages(&mut to_serve, &mut lines, "s1", "all", 0, &registration).await;
+    assert_eq!(all["body"]["registration"], registration, "{all}");
+    assert_eq!(
+        all["body"]["messages"],
+        serde_json::json!([
+            {"seq": 1, "path": one, "text": "one", "from": "x"},
+            {"seq": 2, "path": two, "text": "two", "from": "x"},
+        ]),
         "{all}"
     );
-    assert!(
-        messages.iter().any(|m| m["seq"] == second_seq && m["path"] == "two.txt" && m["text"] == "two"),
-        "{all}"
+    assert_eq!(all["body"]["last"], 2, "{all}");
+
+    let later = read_messages(&mut to_serve, &mut lines, "s1", "later", 1, &registration).await;
+    assert_eq!(
+        later["body"]["messages"],
+        serde_json::json!([{"seq": 2, "path": two, "text": "two", "from": "x"}]),
+        "{later}"
     );
-    let seqs: Vec<u64> = messages.iter().map(|m| m["seq"].as_u64().expect("seq is an integer")).collect();
-    assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "messages are not in increasing seq: {all}");
-    assert!(all["body"]["last"].as_u64().expect("last is an integer") >= second_seq, "{all}");
 
-    send_messaging_request(
-        &mut to_serve,
-        "s1",
-        "later",
-        serde_json::json!({"operation": "messages.read", "after": first_seq}),
-    )
-    .await;
-    let later = messaging_reply(&mut lines, "later").await;
-    let later_messages = later["body"]["messages"].as_array().expect("messages is an array");
-    assert!(later_messages.iter().all(|m| m["seq"].as_u64().expect("seq is an integer") > first_seq), "{later}");
-    assert!(later_messages.iter().any(|m| m["seq"] == second_seq && m["path"] == "two.txt"), "{later}");
-
-    send_messaging_request(
-        &mut to_serve,
-        "s1",
-        "again",
-        serde_json::json!({"operation": "messages.read", "after": 0}),
-    )
-    .await;
-    let again = messaging_reply(&mut lines, "again").await;
+    let again = read_messages(&mut to_serve, &mut lines, "s1", "again", 0, &registration).await;
     assert_eq!(again["body"], all["body"], "a repeated read changed the result");
+
+    std::fs::remove_file(dir.path().join(&one)).expect("the message must be removed");
+    let removed = file_event(&mut lines, &one, "removed").await;
+    assert_eq!(removed["body"]["seq"], 3, "{removed}");
+    let after_removal = read_messages(&mut to_serve, &mut lines, "s1", "removed", 0, &registration).await;
+    assert_eq!(
+        after_removal["body"]["messages"],
+        serde_json::json!([{"seq": 2, "path": two, "text": "two", "from": "x"}]),
+        "{after_removal}"
+    );
+    assert_eq!(after_removal["body"]["last"], 3, "{after_removal}");
+}
+
+/// Covers core docs/spec/messaging.md#cursor-across-restart and F910: a read with `after` above 0 needs its
+/// registration, and a read with the registration of an earlier sidecar is refused with `epoch-changed`, which
+/// names both registrations; a read of the current registration from 0 returns the messages of the new
+/// registration.
+#[tokio::test]
+async fn a_cursor_of_an_earlier_registration_is_refused_with_epoch_changed() {
+    let dir = tempfile::tempdir().expect("temporary directory must be created");
+    let (mut first_input, mut first_lines, first_task) = start_messaging_service();
+    let earlier =
+        register_messaging_folder(&mut first_input, &mut first_lines, "s1", "register", dir.path()).await;
+    let earlier_registration = earlier["body"]["registration"].clone();
+    let one = write_message(dir.path(), "x", "one", b"one");
+    file_event(&mut first_lines, &one, "created").await;
+    drop(first_input);
+    while first_lines.next_line().await.expect("failed to read a sidecar line").is_some() {}
+    first_task.await.expect("the first service task ended").expect("the first service ended");
+
+    let (mut to_serve, mut lines, _task) = start_messaging_service();
+    let current = register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let current_registration = current["body"]["registration"].clone();
+    assert_ne!(current_registration, earlier_registration, "a new sidecar kept the registration");
+
+    send_messaging_request(&mut to_serve, "s1", "bare", serde_json::json!({"operation": "messages.read", "after": 1})).await;
+    let bare = messaging_reply(&mut lines, "bare").await;
+    assert_eq!(bare["body"]["error"], "invalidParams", "{bare}");
+
+    let stale = read_messages(&mut to_serve, &mut lines, "s1", "stale", 1, &earlier_registration).await;
+    assert_eq!(stale["body"]["error"], "epoch-changed", "{stale}");
+    let reason = stale["body"]["reason"].as_str().expect("the refusal has a reason");
+    assert!(reason.contains(earlier_registration.as_str().unwrap()), "{stale}");
+    assert!(reason.contains(current_registration.as_str().unwrap()), "{stale}");
+
+    let two = write_message(dir.path(), "x", "two", b"two");
+    file_event(&mut lines, &two, "created").await;
+    let fresh = read_messages(&mut to_serve, &mut lines, "s1", "fresh", 0, &current_registration).await;
+    assert_eq!(
+        fresh["body"]["messages"],
+        serde_json::json!([{"seq": 1, "path": two, "text": "two", "from": "x"}]),
+        "{fresh}"
+    );
 }
 
 /// Covers core docs/spec/messaging.md#mcp-tools: `messages.wait` ends on arrival of a message with the shape of
@@ -9027,30 +9149,30 @@ async fn messages_read_returns_messages_after_the_given_seq_and_repeats_the_same
 async fn messages_wait_ends_on_arrival_with_the_read_shape() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
-    register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registered =
+        register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", dir.path()).await;
+    let registration = registered["body"]["registration"].clone();
 
     send_messaging_request(
         &mut to_serve,
         "s1",
         "wait",
-        serde_json::json!({"operation": "messages.wait", "after": 0}),
+        serde_json::json!({"operation": "messages.wait", "after": 0, "registration": registration}),
     )
     .await;
-    std::fs::write(dir.path().join("arrive.txt"), "arrived").expect("file must be written");
+    let name = write_message(dir.path(), "x", "arrive", b"arrived");
 
     let reply = messaging_reply(&mut lines, "wait").await;
-    assert!(reply["body"].get("error").is_none(), "{reply}");
-    let messages = reply["body"]["messages"].as_array().expect("messages is an array");
-    assert!(
-        messages.iter().any(|m| m["path"] == "arrive.txt" && m["text"] == "arrived"),
+    assert_eq!(
+        reply["body"],
+        serde_json::json!({"registration": registration, "messages": [{"seq": 1, "path": name, "text": "arrived", "from": "x"}], "last": 1}),
         "{reply}"
     );
-    assert!(reply["body"]["last"].is_u64(), "{reply}");
 }
 
 /// Covers core docs/spec/messaging.md#mcp-tools: a waiting call that its caller cancels ends without a result.
 /// The caller disconnects by closing its input; the output ends after that, and no reply carries the cids of
-/// the wait. The name of the cancellation error is not stated by the specification and is not asserted.
+/// the wait.
 #[tokio::test]
 async fn a_cancelled_messages_wait_ends_without_a_result() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
@@ -9072,7 +9194,8 @@ async fn a_cancelled_messages_wait_ends_without_a_result() {
         serde_json::json!({"operation": "messages.read", "after": 0}),
     )
     .await;
-    messaging_reply(&mut lines, "barrier").await;
+    let barrier = messaging_reply(&mut lines, "barrier").await;
+    assert!(barrier["body"].get("error").is_none(), "{barrier}");
 
     drop(to_serve);
     let mut remaining = Vec::new();
@@ -9086,8 +9209,7 @@ async fn a_cancelled_messages_wait_ends_without_a_result() {
 }
 
 /// Covers core docs/spec/messaging.md#mcp-tools: a waiting call ends with `registration-closed` and the reason
-/// of the close when its folder is removed. The name of the reason field is not stated by the specification;
-/// the field of the existing error replies is used.
+/// of the close when its folder is removed.
 #[tokio::test]
 async fn a_messages_wait_fails_with_registration_closed_when_the_folder_is_removed() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
@@ -9151,22 +9273,36 @@ async fn messages_wait_for_an_unknown_terminal_fails_with_unknown_terminal() {
 }
 
 /// Covers core docs/spec/messaging.md#folder-removed-or-renamed: removing the registered folder sends
-/// `sidecar.alacritty.registration.closed` with `reason` `folder-removed`.
+/// `registration.closed` with `reason` `folder-removed`, and renaming it does the same.
 #[tokio::test]
 async fn removing_the_registered_folder_sends_registration_closed_with_folder_removed() {
     let dir = tempfile::tempdir().expect("temporary directory must be created");
     let folder = dir.path().join("watched");
     std::fs::create_dir(&folder).expect("folder must be created");
+    let renamed = dir.path().join("renamed");
+    std::fs::create_dir(&renamed).expect("folder must be created");
     let (mut to_serve, mut lines, _task) = start_messaging_service();
     let registered =
         register_messaging_folder(&mut to_serve, &mut lines, "s1", "register", &folder).await;
     let registration = registered["body"]["registration"].clone();
+    let moved = register_messaging_folder(&mut to_serve, &mut lines, "s2", "moved", &renamed).await;
+    let moved_registration = moved["body"]["registration"].clone();
 
     std::fs::remove_dir_all(&folder).expect("folder must be removed");
     let event = next_line_where(&mut lines, |value| {
         value["body"]["event"] == "registration.closed"
     })
     .await;
+    assert_eq!(event["surface"], "s1", "{event}");
     assert_eq!(event["body"]["registration"], registration, "{event}");
+    assert_eq!(event["body"]["reason"], "folder-removed", "{event}");
+
+    std::fs::rename(&renamed, dir.path().join("elsewhere")).expect("folder must be renamed");
+    let event = next_line_where(&mut lines, |value| {
+        value["body"]["event"] == "registration.closed"
+    })
+    .await;
+    assert_eq!(event["surface"], "s2", "{event}");
+    assert_eq!(event["body"]["registration"], moved_registration, "{event}");
     assert_eq!(event["body"]["reason"], "folder-removed", "{event}");
 }
