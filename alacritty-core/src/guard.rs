@@ -767,6 +767,7 @@ pub fn judge_transaction(
     for verdict in line.observe(session, inputs) {
         match verdict {
             Verdict::Allow => {
+                // events: sidecar.alacritty.guard.allow
                 log.emit_for(
                     Level::Info,
                     ALLOW_EVENT,
@@ -775,6 +776,7 @@ pub fn judge_transaction(
                 );
             }
             Verdict::Refuse { rule, reason } => {
+                // events: sidecar.alacritty.guard.refuse
                 log.emit_for(
                     Level::Error,
                     REFUSE_EVENT,

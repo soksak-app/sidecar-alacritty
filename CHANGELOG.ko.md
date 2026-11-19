@@ -1,5 +1,6 @@
 # Changelog
 
+- S201: catalog test가 catalog가 `sidecar.alacritty.shell.state`의 `sequence`에 쓰는 JSON Schema type `integer`를 받아들이고, guard의 emit site 두 개가 `events:` 주석에 `sidecar.alacritty.guard.allow`와 `sidecar.alacritty.guard.refuse`를 적으므로 `sok-check events`가 통과한다.
 - S200: 주석 언어 check가 `.bash`와 `.zsh` 파일을 bash grammar로 읽고, `alacritty-core/src/shell-integration/bash-integration.bash`의 주석은 영어다.
 - S197: 프롬프트에서의 크기 변경은 core `docs/spec/terminal-state.md#prompt-region`이 정한 대로 프롬프트를 재배치에서 뺀다: 엔진은 `A`와 `P`(종류 `i`, `c`, `s`)의 행을 절대 행으로 기록하고, 재배치 전에 가장 가까운 기록 행부터의 영역을 복사하고 지우며, 재배치 뒤 이전과 같은 만큼 커서 위에 새 너비에서 잘라 되돌려 놓으므로, 셸이 다시 그리기 전에 표시되는 화면은 빈 행 대신 프롬프트를 보인다. 화면 위의 프롬프트 시작이나 영역은 `terminal resize:` 오류다. 엔진은 종류를 가진 `P`를 `prompt.start`로 받아들인다. zsh 통합은 `PS1`에 `P;k=i`와 `B`를, `PS2`에 `P;k=s`와 `B`를 더하고, bash 통합은 `PS1`의 각 줄바꿈 뒤에 `P;k=s`를 더한다. 둘 다 명령에는 시작 파일의 프롬프트를 되돌린다. core의 공유 case는 `alacritty/tests/prompt_region_test.rs`에서 실행된다.
 - S192-1: surface는 변경을 고정 33 ms clock이 아니라 frame 요청 `{"image":{"want":{"name","generation"}}}`에 답하는 tick에 그린다. 변경이 없는 surface는 요청을 보내지 않고, 입력 뒤 200 ms 안의 변경은 바로 그린다. cursor 깜빡임은 고정 50 ms 간격의 단계가 아니라 cursor 설정의 깜빡임 간격의 다음 배수에 그린다. Red: `0 frame requests drew the frames [String("clock")]`, 깜빡임 간격 `[49ms, 500ms]` 대 `[530ms, 530ms]`, `next_cursor_blink_change`가 `Some(530)` 대신 `None`을 돌려줌; Green: 같은 test가 통과한다.
