@@ -3401,6 +3401,9 @@ async fn test_a2_pushed_output_reaches_screen() {
         observed.push(screen_line.clone());
 
         let screen_json = grid.apply_line(&screen_line);
+        if answer_frame_request(&mut to_serve, &screen_json).await {
+            continue;
+        }
 
         // A cursor state change can also produce a frame. As the real host does, the next frame
         // must be consumed so that the PTY output that arrives after it advances to the screen.
@@ -3488,6 +3491,9 @@ async fn test_inline_image_event_is_explicit_and_base64_encoded() {
             .unwrap()
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if answer_frame_request(&mut to_serve, &value).await {
+            continue;
+        }
         // Answers the presentation as the host does. An image event follows the presentation that
         // drew the image (or the drawing error).
         if let Some(sequence) = value["body"]["image"]["sequence"].as_i64() {
@@ -4231,6 +4237,9 @@ async fn test_i2_no_image_envelope_until_consumed() {
                 .expect("connection ended before the second image");
             let message: serde_json::Value =
                 serde_json::from_str(&line).expect("valid message after image release");
+            if answer_frame_request(&mut to_serve, &message).await {
+                continue;
+            }
             if let Some(image) = message["body"].get("image") {
                 break image.clone();
             }
@@ -5535,6 +5544,50 @@ async fn next_image_envelope(
     panic!("no image envelope arrived");
 }
 
+/// Answers a frame request line of the surface with the tick that the host sends at the next
+/// display frame of the window (core docs/spec/native-surfaces.md#copy-path-frames), and returns
+/// whether the line was a frame request.
+async fn answer_frame_request(
+    to_serve: &mut tokio::io::DuplexStream,
+    message: &serde_json::Value,
+) -> bool {
+    let Some(want) = message["body"]["image"].get("want") else {
+        return false;
+    };
+    let tick = serde_json::json!({"surface": message["surface"], "body": {"image": {"tick": {
+        "name": want["name"], "generation": want["generation"], "sequence": 1, "refreshRate": 120}}}});
+    to_serve
+        .write_all(format!("{tick}\n").as_bytes())
+        .await
+        .unwrap();
+    true
+}
+
+/// Waits for the next image frame of the surface s1 and answers each frame request on the way, as
+/// the host does.
+async fn next_frame_answering_requests(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    to_serve: &mut tokio::io::DuplexStream,
+) -> serde_json::Value {
+    for _ in 0..20 {
+        let line = tokio::time::timeout(std::time::Duration::from_millis(500), lines.next_line())
+            .await
+            .expect("timeout waiting for an image frame")
+            .expect("failed to read an output line")
+            .expect("output ended");
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if answer_frame_request(to_serve, &json).await {
+            continue;
+        }
+        if json["body"]["image"].is_object() {
+            return json;
+        }
+    }
+    panic!("no image frame arrived");
+}
+
 // Answers the image envelope with consumed, as the host does. The sidecar does not apply the next
 // raster configuration until it is answered.
 async fn acknowledge_image(to_serve: &mut tokio::io::DuplexStream, envelope: &serde_json::Value) {
@@ -5701,7 +5754,7 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
         session_id: fake_session_id.clone(),
         data: b"two\r\n".to_vec(),
     });
-    let second = next_image_envelope(&mut lines).await;
+    let second = next_frame_answering_requests(&mut lines, &mut to_serve).await;
     assert_eq!(
         second["body"]["image"]["sequence"].as_u64(),
         Some(2),
@@ -5734,10 +5787,14 @@ async fn test_no_image_envelope_while_outstanding_after_release() {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
             && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
-            && json["body"]["image"]["sequence"].as_u64() == Some(3)
         {
-            caught_up = true;
-            break;
+            if answer_frame_request(&mut to_serve, &json).await {
+                continue;
+            }
+            if json["body"]["image"]["sequence"].as_u64() == Some(3) {
+                caught_up = true;
+                break;
+            }
         }
     }
     assert!(
@@ -5808,10 +5865,14 @@ async fn test_image_error_response_reenables_drawing() {
         if let Ok(Ok(Some(line))) =
             tokio::time::timeout(std::time::Duration::from_millis(100), lines.next_line()).await
             && let Ok(json) = serde_json::from_str::<serde_json::Value>(&line)
-            && json["body"]["image"]["sequence"].as_u64() == Some(2)
         {
-            drew_again = true;
-            break;
+            if answer_frame_request(&mut to_serve, &json).await {
+                continue;
+            }
+            if json["body"]["image"]["sequence"].as_u64() == Some(2) {
+                drew_again = true;
+                break;
+            }
         }
     }
     assert!(
@@ -6190,6 +6251,11 @@ async fn output_while_the_host_holds_a_raster_is_drawn_once_after_the_answer() {
             .await
             .map(|line| line.unwrap())
     {
+        if let Ok(message) = serde_json::from_str::<serde_json::Value>(&line)
+            && answer_frame_request(&mut to_serve, &message).await
+        {
+            continue;
+        }
         if line.contains(r#""kind":"iosurface-global""#) {
             presentations += 1;
         }
@@ -6611,6 +6677,9 @@ async fn an_inline_image_event_follows_the_presentation_that_draws_the_image() {
             };
         seen.push(line.chars().take(120).collect::<String>());
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        if answer_frame_request(&mut to_serve, &value).await {
+            continue;
+        }
         if let Some(sequence) = value["body"]["image"]["sequence"].as_i64() {
             presented_after_output = true;
             to_serve
@@ -7414,6 +7483,9 @@ async fn next_measured_frame_after(
         recent_messages.push(message.clone());
         if recent_messages.len() > 8 {
             recent_messages.remove(0);
+        }
+        if answer_frame_request(to_serve, &message).await {
+            continue;
         }
         if message["body"]["ack"] == true {
             *acknowledgements += 1;

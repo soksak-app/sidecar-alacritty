@@ -101,6 +101,13 @@ async function main(options) {
         buffered = buffered.slice(newline + 1);
         if (message.body?.error) throw new Error(`the service reported ${JSON.stringify(message.body)}`);
         const image = message.body?.image;
+        if (message.surface === surface && image?.want) {
+          // The host answers a frame request with one tick at the next display frame of the window
+          // (core docs/spec/native-surfaces.md#copy-path-frames); this host answers at once, so the
+          // measurement holds no display frame of its own.
+          send({ image: { tick: { name: image.want.name, generation: image.want.generation, sequence: 1, refreshRate: 120 } } });
+          continue;
+        }
         if (message.surface !== surface || !image?.token) continue;
         frames += 1;
         firstFrame();
