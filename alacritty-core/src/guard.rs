@@ -544,9 +544,9 @@ fn git_push_force_protected(words: &[Word]) -> bool {
         let spec = refspec.strip_prefix('+').unwrap_or(*refspec);
         // default: a spec without a colon is its own destination.
         let destination = spec.rsplit(':').next().unwrap_or(spec);
-        // default: a destination without the heads prefix is compared as written.
         let branch = destination
             .strip_prefix("refs/heads/")
+            // default: a destination without the heads prefix is compared as written.
             .unwrap_or(destination);
         matches!(branch, "main" | "master" | "HEAD" | "")
     })
