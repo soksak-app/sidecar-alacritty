@@ -1,5 +1,6 @@
 # Changelog
 
+- S188: The sidecar registers a message folder for a surface with `messages.register`, watches it with the crate `notify`, sends `file.changed` with the sender `from` for each change of a message `<from>.<token>.txt` and `registration.closed` when the folder is removed or renamed, and answers `messages.read` and `messages.wait` with the cursor epoch `registration` (core docs/spec/messaging.md). A `.txt` name without a sender is refused with `invalid-sender`, a cursor of another registration with `epoch-changed`, and a temporary name gives no event. The serve tests and the shared name cases of core failed on the unchanged sidecar and pass.
 - S118: The `screen.read` request takes `from` and `count` and returns retained rows above the viewport, numbered by the absolute line numbers; the reply is the event `screen.rows`.
 - S117: A dim cell draws its foreground blended toward its background, and the screen hash covers the dim attribute.
 - S115: A text selection drag past the top or the bottom edge of the view scrolls the history: `selection.update` takes `overflow`, and a nonzero overflow moves the primary viewport by `ceil(|overflow| / cell height)` rows within the retained history before the selection extends; an unchanged update and a reported mouse gesture move nothing. Red: the drag tests failed with no viewport move. Green: they pass.

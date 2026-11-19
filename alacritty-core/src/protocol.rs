@@ -1,6 +1,7 @@
 use crate::encoding::{self, Key};
 use crate::events::{Events, Level, Subject};
 use crate::guard::{self, LineInput};
+use crate::messaging;
 use crate::shell_state;
 use crate::inline_image::{Dimension, InlineImageCommand};
 use crate::policy::Class;
@@ -568,6 +569,8 @@ pub struct PersistentRegistry {
     next_epoch: std::sync::atomic::AtomicU64,
     shutdown: AtomicBool,
     detach_requests: Arc<ImageDetachRequestLedger>,
+    /// The message folders that the surfaces of this service have registered (core docs/spec/messaging.md).
+    claims: Arc<messaging::FolderClaims>,
 }
 
 const SURFACE_ACTOR_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -641,6 +644,7 @@ impl PersistentRegistry {
             next_epoch: std::sync::atomic::AtomicU64::new(1),
             shutdown: AtomicBool::new(false),
             detach_requests: Arc::new(ImageDetachRequestLedger::default()),
+            claims: messaging::FolderClaims::new(),
         })
     }
 
@@ -1311,6 +1315,16 @@ enum SurfaceCommand {
         request: ShellRequest,
     },
     Reconnect,
+    /// `messages.register` with its absolute folder (core docs/spec/messaging.md#registered-folder).
+    MessagesRegister {
+        folder: String,
+    },
+    /// `messages.read`, or `messages.wait` when `wait` is set (core docs/spec/messaging.md#mcp-tools).
+    MessagesRead {
+        after: u64,
+        registration: Option<String>,
+        wait: bool,
+    },
     Configure(ImageConfiguration),
     /// The drawing state of the image region that the host sends at its attachment and at each
     /// change (core docs/spec/native-surfaces.md#image-regions).
@@ -3805,6 +3819,38 @@ fn local_surface_key(
 
 /// Asynchronous work per surface. It owns the engine and the daemon connection, and processes
 /// commands.
+/// A `messages.wait` that no message has answered yet, with the sink of its request.
+struct MessageWait {
+    after: u64,
+    registration: Option<String>,
+    output: OutputSink,
+}
+
+/// Answers each wait that has a message after its cursor or a refusal, and keeps the others. Returns false when the
+/// output has closed.
+async fn answer_message_waits(
+    surface_id: &str,
+    waits: &mut Vec<MessageWait>,
+    registration: &messaging::Registration,
+) -> bool {
+    let mut pending = Vec::new();
+    for wait in waits.drain(..) {
+        let body = match registration.read(wait.after, wait.registration.as_deref()) {
+            Ok(read) if read.empty => {
+                pending.push(wait);
+                continue;
+            }
+            Ok(read) => read.body,
+            Err(refusal) => refusal.body(),
+        };
+        if wait.output.reply(json!({"surface": surface_id, "body": body})).await.is_err() {
+            return false;
+        }
+    }
+    *waits = pending;
+    true
+}
+
 async fn surface_task(
     surface_id: String,
     log: Events,
@@ -3812,6 +3858,7 @@ async fn surface_task(
     session_port: Arc<dyn SessionPort>,
     mut cmd_rx: mpsc::Receiver<Dispatch>,
     output_tx: OutputSink,
+    claims: Arc<messaging::FolderClaims>,
 ) {
     let mut engine = engine_factory();
     let mut inputs = ReplayInputs::new(log.clone());
@@ -3822,6 +3869,11 @@ async fn surface_task(
     let mut line_guard = guard::LineGuard::default();
     // The shell state of the session of this surface, from the OSC 133 marks (shell_state.rs).
     let mut shell_state = shell_state::ShellStateTracker::default();
+    // The message folder of this surface, the reports of its watch and the waits that no message has answered yet
+    // (messaging.rs).
+    let mut messages: Option<messaging::Registration> = None;
+    let mut message_reports: Option<messaging::Reports> = None;
+    let mut message_waits: Vec<MessageWait> = Vec::new();
     let mut daemon_events_rx = session_port.get_events().await;
     let mut image_state: Option<ImageState> = None;
     let mut preserved_inline_images = Vec::new();
@@ -3989,6 +4041,38 @@ async fn surface_task(
                         }
                     }
             }
+            report = async { message_reports.as_mut().expect("the branch is enabled only with reports").recv().await }, if message_reports.is_some() => {
+                let Some(registration) = messages.as_mut() else { continue; };
+                let mut closed = false;
+                for signal in registration.apply(report) {
+                    match signal {
+                        messaging::Signal::Changed(event) => {
+                            let fields = event.fields(registration.id());
+                            log.emit_for(Level::Debug, "sidecar.alacritty.file.changed", Subject::surface(&surface_id), &fields);
+                            let mut body = fields;
+                            body["event"] = json!("file.changed");
+                            if output_tx.send(json!({"surface": surface_id, "body": body}).to_string()).await.is_err() { return; }
+                        }
+                        messaging::Signal::Closed => closed = true,
+                        messaging::Signal::Failed(reason) => log.record_error("messages", reason),
+                    }
+                }
+                if closed {
+                    let fields = json!({"registration": registration.id(), "reason": "folder-removed"});
+                    log.emit_for(Level::Info, "sidecar.alacritty.registration.closed", Subject::surface(&surface_id), &fields);
+                    let mut body = fields;
+                    body["event"] = json!("registration.closed");
+                    if output_tx.send(json!({"surface": surface_id, "body": body}).to_string()).await.is_err() { return; }
+                    for wait in message_waits.drain(..) {
+                        let response = json!({"surface": surface_id, "body": {"error": "registration-closed", "reason": "folder-removed"}});
+                        if wait.output.reply(response).await.is_err() { return; }
+                    }
+                    messages = None;
+                    message_reports = None;
+                } else if !answer_message_waits(&surface_id, &mut message_waits, registration).await {
+                    return;
+                }
+            }
             Some(Dispatch { command: cmd, request }) = cmd_rx.recv() => {
                 // The replies of this command answer the request that sent it.
                 let output_tx = match request {
@@ -4032,7 +4116,48 @@ async fn surface_task(
                             return;
                         }
                     }
+                    SurfaceCommand::MessagesRegister { folder } => {
+                        let response = match messages.as_ref() {
+                            Some(current) if current.folder() == std::path::Path::new(&folder) => {
+                                json!({"surface": surface_id, "body": {"registration": current.id(), "folder": folder}})
+                            }
+                            Some(current) => {
+                                json!({"surface": surface_id, "body": {"error": "already-registered", "reason": format!("the surface {surface_id} holds the registration of {}", current.folder().display())}})
+                            }
+                            None => match messaging::Registration::register(&claims, &surface_id, std::path::Path::new(&folder)) {
+                                Ok((registration, reports)) => {
+                                    let fields = json!({"registration": registration.id(), "folder": folder});
+                                    log.emit_for(Level::Info, "sidecar.alacritty.messages.registered", Subject::surface(&surface_id), &fields);
+                                    messages = Some(registration);
+                                    message_reports = Some(reports);
+                                    json!({"surface": surface_id, "body": fields})
+                                }
+                                Err(refusal) => json!({"surface": surface_id, "body": refusal.body()}),
+                            },
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
+                    SurfaceCommand::MessagesRead { after, registration, wait } => {
+                        let Some(current) = messages.as_ref() else {
+                            let response = json!({"surface": surface_id, "body": {"error": "unknown-terminal", "reason": format!("the surface {surface_id} holds no registration")}});
+                            if output_tx.reply(response).await.is_err() { return; }
+                            continue;
+                        };
+                        if wait {
+                            message_waits.push(MessageWait { after, registration, output: output_tx.clone() });
+                            if !answer_message_waits(&surface_id, &mut message_waits, current).await { return; }
+                        } else {
+                            let body = match current.read(after, registration.as_deref()) {
+                                Ok(read) => read.body,
+                                Err(refusal) => refusal.body(),
+                            };
+                            if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
+                        }
+                    }
                     SurfaceCommand::Reconnect => {
+                        // A wait belongs to the caller of the connection that sent it; that caller has gone, so the wait ends
+                        // without a result (core docs/spec/messaging.md#mcp-tools).
+                        message_waits.clear();
                         screen_watched = false;
                         // The host sends the drawing state of the region again to a new connection.
                         hidden_image = None;
@@ -5413,6 +5538,12 @@ where
     let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let (watched, arrived) = mpsc::unbounded_channel();
     tokio::spawn(watch_requests(arrived, connection));
+    // The message folders of the service: those of the registry of a persistent service, and otherwise those of this
+    // connection, which is the whole service.
+    let claims = match registry.as_ref() {
+        Some(registry) => registry.claims.clone(),
+        None => messaging::FolderClaims::new(),
+    };
     let mut surface_txs: HashMap<String, mpsc::Sender<Dispatch>> = HashMap::new();
     let mut surface_epochs: HashMap<String, u64> = HashMap::new();
     let mut tasks = tokio::task::JoinSet::new();
@@ -5738,6 +5869,7 @@ where
                                 let out_tx = output_tx.clone();
                                 let sid = surface_id.clone();
                                 let task_trace = log.clone();
+                                let surface_claims = claims.clone();
                                 let actor = tokio::spawn(async move {
                                     surface_task(
                                         sid,
@@ -5746,6 +5878,7 @@ where
                                         session_port,
                                         cmd_rx,
                                         out_tx,
+                                        surface_claims,
                                     )
                                     .await;
                                 });
@@ -5782,10 +5915,11 @@ where
                         let sid = surface_id.clone();
                         let sid_for_monitor = sid.clone();
                         let task_trace = log.clone();
+                        let surface_claims = claims.clone();
 
                         // Spawns the actual surface task as a separate handle
                         let surface_handle = tokio::spawn(async move {
-                            surface_task(sid, task_trace, factory, session_port, cmd_rx, out_tx)
+                            surface_task(sid, task_trace, factory, session_port, cmd_rx, out_tx, surface_claims)
                                 .await;
                         });
 
@@ -6226,6 +6360,38 @@ where
                                     }
                                 }
                             },
+                            "messages.register" => {
+                                let folder = match body.get("folder") {
+                                    Some(Value::String(folder)) if folder.starts_with('/') => folder.clone(),
+                                    _ => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": "messages.register requires folder, an absolute path", "operation": operation}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                };
+                                if tx.send(SurfaceCommand::MessagesRegister { folder }).await.is_err() {
+                                    break;
+                                }
+                            }
+                            "messages.read" | "messages.wait" => {
+                                let cursor = parse_message_cursor(&body);
+                                let (after, registration) = match cursor {
+                                    Ok(cursor) => cursor,
+                                    Err(reason) => {
+                                        let response = json!({"surface": surface_id, "body": {"error": "invalidParams", "reason": reason, "operation": operation}});
+                                        if reply_tx.reply(response).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let wait = operation == "messages.wait";
+                                if tx.send(SurfaceCommand::MessagesRead { after, registration, wait }).await.is_err() {
+                                    break;
+                                }
+                            }
                             "screen.read" => match parse_screen_read_rows(&body) {
                                 Ok(rows) => {
                                     if tx.send(SurfaceCommand::ScreenRead { rows }).await.is_err() {
@@ -6742,6 +6908,26 @@ impl Drop for RequestTrace<'_> {
 
 /// The operation name of a request: operation, closed, the operation in body, or the first key of
 /// body followed by the first key of its value (for example, image.configure).
+/// The cursor of `messages.read` and `messages.wait`: `after`, an integer of at least 0 that defaults to 0, and
+/// `registration`, a string that is required when `after` is above 0 (core docs/spec/messaging.md#cursor-across-restart).
+fn parse_message_cursor(body: &Value) -> Result<(u64, Option<String>), String> {
+    let after = match body.get("after") {
+        None => 0,
+        Some(after) => after
+            .as_u64()
+            .ok_or_else(|| format!("after must be an integer of at least 0: {after}"))?,
+    };
+    let registration = match body.get("registration") {
+        None => None,
+        Some(Value::String(registration)) => Some(registration.clone()),
+        Some(registration) => return Err(format!("registration must be a string: {registration}")),
+    };
+    if after > 0 && registration.is_none() {
+        return Err("a read with after above 0 requires registration".to_string());
+    }
+    Ok((after, registration))
+}
+
 pub fn request_operation(value: &Value) -> String {
     if let Some(operation) = value.get("operation").and_then(Value::as_str) {
         return operation.to_string();
