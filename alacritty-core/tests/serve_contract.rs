@@ -145,7 +145,12 @@ impl MockEngine {
 }
 
 impl Engine for MockEngine {
-    fn screen_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    fn screen_rows(
+        &self,
+        _screen: soksak_sidecar_alacritty_core::RowScreen,
+        from: u64,
+        count: u32,
+    ) -> Result<Vec<Vec<Cell>>, String> {
         Ok((0..u64::from(count))
             .map(|offset| {
                 let label = format!("R{}", from + offset);
@@ -8735,7 +8740,7 @@ async fn a_row_range_screen_read_replies_with_the_screen_rows_event_of_the_contr
     let calls = Arc::new(Mutex::new(Calls::default()));
     let input = br#"{"surface":"owned-surface","root":"/tmp","body":{"operation":"open","shell":"/bin/sh","image":"view"}}
 {"surface":"owned-surface","body":{"image":{"configure":{"name":"view","generation":1,"raster":1,"width":800,"height":384,"scale":1.0}}}}
-{"surface":"owned-surface","body":{"operation":"screen.read","from":2,"count":2}}
+{"surface":"owned-surface","body":{"operation":"screen.read","screen":"primary","from":2,"count":2}}
 "#;
     let (mut to_serve, serve_in) = tokio::io::duplex(16 * 1024);
     let (serve_out, from_serve) = tokio::io::duplex(16 * 1024 * 1024);
@@ -8771,6 +8776,7 @@ async fn a_row_range_screen_read_replies_with_the_screen_rows_event_of_the_contr
     }
     let value = reply.expect("the screen rows event was not emitted");
     assert_eq!(value["surface"], "owned-surface");
+    assert_eq!(value["body"]["screen"], "primary");
     assert_eq!(value["body"]["from"], 2);
     assert_eq!(value["body"]["count"], 2);
     let rows = value["body"]["rows"]

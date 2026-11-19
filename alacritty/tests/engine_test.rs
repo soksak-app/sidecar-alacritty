@@ -3,7 +3,7 @@ mod engine;
 
 use engine::{AlacrittyEngine, CSI_SELECTOR_INVENTORY, OSC_SELECTOR_INVENTORY, OscOutcome};
 use soksak_sidecar_alacritty_core::{
-    CursorShape, DEFAULT_PALETTE, Engine, EngineEvent, ShellMarker, TerminalTheme,
+    CursorShape, DEFAULT_PALETTE, Engine, EngineEvent, RowScreen, ShellMarker, TerminalTheme,
     default_terminal_color, inline_image::Dimension, inline_image::InlineImageCommand,
 };
 
@@ -864,7 +864,7 @@ fn screen_read_returns_rows_above_the_viewport() {
     assert_eq!(line_text(&engine.screen(), 0), "ROW07");
 
     let above = engine
-        .screen_rows(4, 3)
+        .screen_rows(RowScreen::Primary, 4, 3)
         .expect("rows 4 to 6 are in the history");
     let above_text: Vec<String> = above
         .iter()
@@ -876,7 +876,9 @@ fn screen_read_returns_rows_above_the_viewport() {
         .collect();
     assert_eq!(above_text, ["ROW04", "ROW05", "ROW06"]);
 
-    let first = engine.screen_rows(0, 1).expect("row 0 is the oldest row");
+    let first = engine
+        .screen_rows(RowScreen::Primary, 0, 1)
+        .expect("row 0 is the oldest row");
     assert_eq!(first.len(), 1);
     let first_text: String = first[0]
         .iter()
@@ -1343,7 +1345,7 @@ fn alternate_screen_is_separate_from_primary_scrollback() {
     // The primary history returns unchanged.
     assert_eq!(engine.scrollback(), history);
     let rows: Vec<String> = engine
-        .screen_rows(0, 3)
+        .screen_rows(RowScreen::Primary, 0, 3)
         .expect("the primary history rows")
         .iter()
         .map(|row| row.iter().filter_map(|cell| cell.ch.as_deref()).collect())

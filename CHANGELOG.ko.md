@@ -1,5 +1,6 @@
 # Changelog
 
+- S205-2: engine 이 scroll 로 alternate screen 의 위를 떠나는 행을 보존하고 core `docs/spec/terminal-read.md` 가 정하는 대로 `screen.read {screen: "alternate", from, count}` 로 읽는다. history 한도만큼까지 보존하고, 버릴 때마다 `buffer: "alternate rows"` 의 `sidecar.alacritty.buffer_dropped` 기록을 쓰며, program 이 screen 을 떠난 뒤에도 남기고 다음 진입에서 지운다. 범위 읽기에서 `screen` 은 필수이고, alternate screen 이 활성이면 `primary` 는 거절된다. Red: `terminal_read_test` 와 `row_screen_test` 가 바뀌지 않은 engine 에서 compile 되지 않았다. Green: 공유 case 여섯 개가 실제 engine 으로 통과한다.
 - S205-1: `scrollback.history`는 활성 화면의 history다. 대체 화면은 history를 보존하지 않고 `{offset: 0, history: 0}`을 보고하며, 주 화면의 history는 모드 1049 해제 때 그대로 돌아온다. engine은 더 이상 대체 grid에 history 한도를 주지 않는다.
 - S202: `make repeat`가 `make test`의 cargo-nextest runner로 test를 실행하며 각 test는 자기 process에서 실행되므로, 자기 process의 할당이나 footprint를 재는 test는 자기 것만 잰다. 전에는 `cargo test`를 실행했다.
 - S201: catalog test가 catalog가 `sidecar.alacritty.shell.state`의 `sequence`에 쓰는 JSON Schema type `integer`를 받아들이고, guard의 emit site 두 개가 `events:` 주석에 `sidecar.alacritty.guard.allow`와 `sidecar.alacritty.guard.refuse`를 적으므로 `sok-check events`가 통과한다.

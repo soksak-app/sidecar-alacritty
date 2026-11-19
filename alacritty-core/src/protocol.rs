@@ -815,9 +815,18 @@ pub trait Engine: Send + 'static {
     /// The cells of the stored rows `from` to `from + count` (exclusive, absolute numbering of
     /// [`ScreenRowRange`]), with trailing default cells removed from each row. An out-of-range
     /// `from` or `count` is an error that names the stored range. An engine without stored rows
-    /// returns an error.
-    fn screen_rows(&self, _from: u64, _count: u32) -> Result<Vec<Vec<Cell>>, String> {
+    /// returns an error. `screen` names the screen whose rows are read.
+    fn screen_rows(
+        &self,
+        _screen: RowScreen,
+        _from: u64,
+        _count: u32,
+    ) -> Result<Vec<Vec<Cell>>, String> {
         Err("screen rows are not available from this engine".to_string())
+    }
+    /// The kept rows of the alternate screen. An engine without an alternate screen keeps none.
+    fn alternate_rows(&self) -> AlternateRows {
+        AlternateRows::default()
     }
     fn scroll_generation(&self) -> i64 {
         0
@@ -886,6 +895,51 @@ pub enum EngineEvent {
     Error(String),
     /// An internal engine failure, recorded independently of surface output.
     RuntimeError(String),
+    /// The bound of the kept rows of the alternate screen dropped its oldest `rows` rows, whose text
+    /// has `bytes` bytes (docs/spec/terminal-read.md of core).
+    AlternateRowsDropped {
+        rows: usize,
+        bytes: usize,
+    },
+}
+
+/// The screen whose rows a range read names (docs/spec/terminal-read.md of core): the primary screen
+/// with its history, or the kept rows of the alternate screen followed by its rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowScreen {
+    Primary,
+    Alternate,
+}
+
+impl RowScreen {
+    /// The value of the `screen` member that names this screen.
+    pub fn name(self) -> &'static str {
+        match self {
+            RowScreen::Primary => "primary",
+            RowScreen::Alternate => "alternate",
+        }
+    }
+
+    /// The screen of a `screen` member, or an error that names the value.
+    pub fn parse(value: Option<&Value>) -> Result<Self, String> {
+        match value.and_then(Value::as_str) {
+            Some("primary") => Ok(RowScreen::Primary),
+            Some("alternate") => Ok(RowScreen::Alternate),
+            _ => Err(format!(
+                "screen.read requires screen primary or alternate, got {}",
+                value.map_or_else(|| "none".to_string(), Value::to_string)
+            )),
+        }
+    }
+}
+
+/// The kept rows of the alternate screen: whether the alternate screen is active, the number of kept
+/// rows above its screen, and the number of kept rows that the bound dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AlternateRows {
+    pub active: bool,
+    pub history: usize,
+    pub dropped: u64,
 }
 
 /// The cell column and scroll generation at the point where an inline image sequence was met. The
@@ -1192,13 +1246,15 @@ pub struct Scrollback {
 /// `invalidParams`; the request does not return a clamped number of rows.
 pub const MAX_SCREEN_ROWS_READ: u32 = 200;
 
-/// The rows that a `screen.read` request with `from` and `count` names. `from` is an absolute row
-/// number: row 0 is the first row that entered the history, and the viewport starts after the
-/// history rows. The rows `from` to `from + count` (exclusive) must lie inside the stored rows, from
-/// the oldest kept history row to the last screen row; a request outside them is refused with an
-/// `invalidParams` reply that names the stored range.
+/// The rows that a `screen.read` request with `screen`, `from` and `count` names. `from` is an
+/// absolute row number of `screen`: on the primary screen row 0 is the first row that entered the
+/// history, and the viewport starts after the history rows; on the alternate screen row 0 is the
+/// first row kept since the alternate screen was entered (docs/spec/terminal-read.md of core). The
+/// rows `from` to `from + count` (exclusive) must lie inside the stored rows; a request outside them
+/// is refused with an `invalidParams` reply that names the stored range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenRowRange {
+    pub screen: RowScreen,
     pub from: u64,
     pub count: u32,
 }
@@ -1766,6 +1822,7 @@ fn parse_screen_read_rows(body: &Value) -> Result<Option<ScreenRowRange>, String
     match (body.get("from"), body.get("count")) {
         (None, None) => Ok(None),
         (Some(from), Some(count)) => {
+            let screen = RowScreen::parse(body.get("screen"))?;
             let from = from
                 .as_u64()
                 .ok_or("screen.read from must be a non-negative integer")?;
@@ -1776,7 +1833,11 @@ fn parse_screen_read_rows(body: &Value) -> Result<Option<ScreenRowRange>, String
             if !(1..=MAX_SCREEN_ROWS_READ).contains(&count) {
                 return Err(count_error());
             }
-            Ok(Some(ScreenRowRange { from, count }))
+            Ok(Some(ScreenRowRange {
+                screen,
+                from,
+                count,
+            }))
         }
         _ => Err("screen.read requires both from and count, or neither".to_string()),
     }
@@ -3575,6 +3636,19 @@ async fn send_engine_events(
             EngineEvent::RuntimeError(reason) => {
                 log.record_error("engine", reason);
             }
+            EngineEvent::AlternateRowsDropped { rows, bytes } => {
+                log.emit_for(
+                    Level::Warn,
+                    "sidecar.alacritty.buffer_dropped",
+                    Subject::surface(surface_id),
+                    &json!({
+                        "buffer": "alternate rows",
+                        "count": rows,
+                        "bytes": bytes,
+                        "reason": "the kept rows of the alternate screen reached the history limit",
+                    }),
+                );
+            }
             EngineEvent::Error(reason) => {
                 if !emit_surface_events {
                     continue;
@@ -5107,9 +5181,9 @@ async fn surface_task(
                     SurfaceCommand::ScreenRead { rows: Some(range) } => {
                         // Stored rows are read without changing the sent screen or the frame record:
                         // the reply is the cells of the named rows, not a screen message.
-                        match engine.screen_rows(range.from, range.count) {
+                        match engine.screen_rows(range.screen, range.from, range.count) {
                             Ok(lines) => {
-                                let response = json!({"surface": surface_id, "body": {"event": "screen.rows", "from": range.from, "count": range.count, "rows": lines}});
+                                let response = json!({"surface": surface_id, "body": {"event": "screen.rows", "screen": range.screen.name(), "from": range.from, "count": range.count, "rows": lines}});
                                 if output_tx.reply(response).await.is_err() { return; }
                             }
                             Err(reason) => {
