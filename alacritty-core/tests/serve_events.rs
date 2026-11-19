@@ -1713,9 +1713,11 @@ async fn a_request_in_progress_after_the_bound_is_the_event_request_waiting_with
 }
 
 /// A surface whose host answers each frame with `leased` and releases the frame before it, as the
-/// lease mode of core does. It records the time of each frame that the surface sends.
+/// lease mode of core does, and each frame request with one tick, as the next display frame of the
+/// window does. It records the time of each frame and of each frame request that the surface sends.
 struct LeasedSurface {
     events: TestEvents,
+    wants: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
     outputs: mpsc::Sender<soksak_sidecar_alacritty_core::protocol::DaemonEvent>,
     requests: mpsc::Sender<Vec<u8>>,
     frames: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
@@ -1757,12 +1759,31 @@ async fn serve_leased() -> LeasedSurface {
         }
     });
     let frames = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let wants = Arc::new(std::sync::Mutex::new(Vec::new()));
     let answers = requests.clone();
     let times = Arc::clone(&frames);
+    let wanted = Arc::clone(&wants);
     tokio::spawn(async move {
         let mut lines = BufReader::new(from_serve).lines();
+        let mut ticks = 0;
         while let Some(line) = lines.next_line().await.unwrap() {
             let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if let Some(want) = value["body"]["image"]["want"].as_object() {
+                assert_eq!(
+                    serde_json::Value::Object(want.clone()),
+                    serde_json::json!({"name": "view", "generation": 1}),
+                    "the frame request names the region and its generation"
+                );
+                wanted.lock().unwrap().push(tokio::time::Instant::now());
+                ticks += 1;
+                let tick = format!(
+                    "{{\"surface\":\"s1\",\"body\":{{\"image\":{{\"tick\":{{\"name\":\"view\",\"generation\":1,\"sequence\":{ticks},\"refreshRate\":120}}}}}}}}\n"
+                );
+                if answers.send(tick.into_bytes()).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             let Some(sequence) = value["body"]["image"]["sequence"].as_u64() else {
                 continue;
             };
@@ -1789,6 +1810,7 @@ async fn serve_leased() -> LeasedSurface {
         .unwrap();
     let surface = LeasedSurface {
         events,
+        wants,
         outputs,
         requests,
         frames,
@@ -1841,10 +1863,10 @@ impl LeasedSurface {
     }
 }
 
-// The end of a session draws the output that the frame clock holds, so the last output of a program
-// is on the screen.
+// The end of a session draws the output that waits for its frame, so the last output of a program is
+// on the screen.
 #[tokio::test(start_paused = true)]
-async fn the_end_of_a_session_draws_the_output_that_the_frame_clock_holds() {
+async fn the_end_of_a_session_draws_the_output_that_waits_for_its_frame() {
     let surface = serve_leased().await;
     surface.output(1).await;
     let before = surface.events.named("sidecar.alacritty.pty_read").len();
@@ -1872,29 +1894,66 @@ async fn the_end_of_a_session_draws_the_output_that_the_frame_clock_holds() {
     .await;
 }
 
-// The frame clock draws output on one clock of 33 ms: no two frames of output without input are
-// closer than 33 ms, and the last output is drawn. The time of the test runs paused, so the clock
-// of the runtime alone measures the interval.
+// Output without an input is drawn at the tick of a frame request and not by a clock of the
+// surface: each frame of the output follows a frame request, and a surface without a change sends
+// no frame request (core docs/spec/native-surfaces.md#copy-path-frames).
 #[tokio::test(start_paused = true)]
-async fn the_frame_clock_draws_output_without_input_at_most_once_in_33_ms() {
+async fn output_without_input_is_drawn_at_the_tick_of_its_frame_request() {
     let surface = serve_leased().await;
+    let frames = surface.events.named("sidecar.alacritty.frame").len();
     surface.output(20).await;
-    let frames = surface.frames.lock().unwrap().clone();
-    assert!(frames.len() >= 2, "the output drew no frame: {frames:?}");
-    for pair in frames.windows(2) {
-        assert!(
-            pair[1] - pair[0] >= std::time::Duration::from_millis(33),
-            "two frames are {:?} apart: {frames:?}",
-            pair[1] - pair[0]
-        );
-    }
+    let reasons: Vec<serde_json::Value> = surface.events.named("sidecar.alacritty.frame")[frames..]
+        .iter()
+        .map(|frame| frame["fields"]["reason"].clone())
+        .collect();
+    let wants = surface.wants.lock().unwrap().len();
+    assert!(
+        wants >= 1 && reasons.iter().all(|reason| reason == "tick") && reasons.len() == wants,
+        "{wants} frame requests drew the frames {reasons:?}; want one frame of reason tick for each request"
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    assert_eq!(
+        surface.wants.lock().unwrap().len(),
+        wants,
+        "a surface without a change sent a frame request"
+    );
 }
 
-// A synchronized update that is never ended is ended by the frame clock at its deadline, 150 ms
+// The blink of a focused cursor is drawn at the blink interval of its setting, counted from the
+// last activity of the cursor, and not at a step of a fixed timer: with an interval of 530 ms the
+// first blink frame follows the frame of the setting by 530 ms.
+#[tokio::test(start_paused = true)]
+async fn the_cursor_blinks_at_the_interval_of_its_setting() {
+    let surface = serve_leased().await;
+    surface
+        .requests
+        .send(br#"{"surface":"s1","body":{"operation":"input","actions":[{"type":"focus","focused":true}],"preedit":{"text":"","markedRange":null,"selectedRange":null,"replacementRange":null,"attributed":false}}}
+"#.to_vec())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let before = surface.frames.lock().unwrap().len();
+    surface
+        .requests
+        .send(br#"{"surface":"s1","body":{"operation":"cursor","blink":"On","interval":530,"idleTimeout":0}}
+"#.to_vec())
+        .await
+        .unwrap();
+    surface.wait_frames(before + 3).await;
+    let frames = surface.frames.lock().unwrap()[before..].to_vec();
+    let gaps: Vec<std::time::Duration> = frames.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    assert_eq!(
+        gaps,
+        [std::time::Duration::from_millis(530); 2],
+        "the gaps between the frame of the setting and the blink frames"
+    );
+}
+
+// A synchronized update that is never ended is ended at its deadline, 150 ms
 // after the opening sequence, and the output that it held is drawn. No event reports the end of an
 // update that never ends, so the timer for the deadline exists only while an update is held.
 #[tokio::test(start_paused = true)]
-async fn the_frame_clock_ends_a_synchronized_update_at_its_deadline() {
+async fn a_synchronized_update_ends_at_its_deadline() {
     let surface = serve_leased().await;
     let started = tokio::time::Instant::now();
     surface
@@ -1921,10 +1980,10 @@ async fn the_frame_clock_ends_a_synchronized_update_at_its_deadline() {
     );
 }
 
-// Output that the frame clock holds builds no screen, because a screen copies the whole grid: the
+// Output that waits for its frame builds no screen, because a screen copies the whole grid: the
 // surface builds one screen for each frame that it draws, not one for each chunk of output.
 #[tokio::test(start_paused = true)]
-async fn the_frame_clock_builds_no_screen_for_output_that_it_holds() {
+async fn output_that_waits_for_its_frame_builds_no_screen() {
     let surface = serve_leased().await;
     let screens = surface.screens.load(std::sync::atomic::Ordering::SeqCst);
     let frames = surface.events.named("sidecar.alacritty.frame").len();
@@ -1937,10 +1996,10 @@ async fn the_frame_clock_builds_no_screen_for_output_that_it_holds() {
     );
 }
 
-// The output that follows an input within 200 ms is drawn at once, without the frame clock: a
-// second output right after the frame of the first one is drawn without waiting 33 ms.
+// The output that follows an input within 200 ms is drawn at once, without a frame request: two
+// outputs right after an input are drawn with no frame request between them.
 #[tokio::test(start_paused = true)]
-async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
+async fn output_within_200_ms_after_an_input_is_drawn_at_once() {
     let surface = serve_leased().await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let drawn = surface.frames.lock().unwrap().len();
@@ -1953,6 +2012,7 @@ async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
         event["fields"]["operation"] == "paste"
     })
     .await;
+    let wants = surface.wants.lock().unwrap().len();
     surface.output(1).await;
     surface.output(1).await;
     let frames = surface.frames.lock().unwrap().clone();
@@ -1960,10 +2020,9 @@ async fn the_frame_clock_draws_output_at_once_within_200_ms_after_an_input() {
         frames.len() >= drawn + 2,
         "the outputs drew no two frames: {frames:?}"
     );
-    let gap = frames[frames.len() - 1] - frames[frames.len() - 2];
     assert!(
-        gap < std::time::Duration::from_millis(33),
-        "the second output after an input waited {gap:?} for the frame clock: {:?}",
+        surface.wants.lock().unwrap().len() == wants,
+        "an output after an input waited for a frame request: {:?}",
         surface
             .events
             .named("sidecar.alacritty.frame")

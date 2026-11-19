@@ -1,5 +1,6 @@
 # Changelog
 
+- S192-1: surface는 변경을 고정 33 ms clock이 아니라 frame 요청 `{"image":{"want":{"name","generation"}}}`에 답하는 tick에 그린다. 변경이 없는 surface는 요청을 보내지 않고, 입력 뒤 200 ms 안의 변경은 바로 그린다. cursor 깜빡임은 고정 50 ms 간격의 단계가 아니라 cursor 설정의 깜빡임 간격의 다음 배수에 그린다. Red: `0 frame requests drew the frames [String("clock")]`, 깜빡임 간격 `[49ms, 500ms]` 대 `[530ms, 530ms]`, `next_cursor_blink_change`가 `Some(530)` 대신 `None`을 돌려줌; Green: 같은 test가 통과한다.
 - S195: panic으로 끝난 persistent service의 surface task는 direct service가 쓰는 감시 함수를 통해 그 surface의 error event `surface task ended: <message>`와 error record로 보고된다.
 - S196: `sok-check events`가 다시 통과한다. guard default의 이유가 그 줄 위에 있고, folder claim은 poison된 lock을 복구한다.
 - S191: guard와 shell 상태의 source와 test를 rustfmt로 정리해서 `make test`의 `cargo fmt --all --check`가 main에서 통과한다. Red: 검사가 9개 파일에서 38개 차이를 보고했다. Green: 0으로 끝난다.

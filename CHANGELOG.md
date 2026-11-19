@@ -1,5 +1,6 @@
 # Changelog
 
+- S192-1: A surface draws a change at the tick that answers its frame request `{"image":{"want":{"name","generation"}}}` and no longer on a fixed clock of 33 ms; a surface without a change sends no request, and a change within 200 ms after an input is drawn at once. The cursor blink is drawn at the next multiple of the blink interval of the cursor setting instead of a step of a fixed 50 ms interval. Red: `0 frame requests drew the frames [String("clock")]`, blink gaps `[49ms, 500ms]` against `[530ms, 530ms]`, and `next_cursor_blink_change` returned `None` against `Some(530)`; Green: the same tests pass.
 - S195: A surface task of the persistent service that ends by a panic is reported as the error event `surface task ended: <message>` of its surface and as an error record, through the monitor that the direct service uses.
 - S196: `sok-check events` passes again: the reason of a guard default stands above its line, and the folder claims recover a poisoned lock.
 - S191: The sources and tests of the guard and the shell state are formatted with rustfmt, so `cargo fmt --all --check` of `make test` passes on main. Red: the check reported 38 differences in 9 files. Green: it exits 0.
