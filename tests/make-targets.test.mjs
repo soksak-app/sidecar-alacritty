@@ -190,3 +190,16 @@ test("each Cargo command of build, test and repeat runs under the link check (S1
     assert.match(command, /\bnode scripts\/check-link\.mjs \S*\bcargo (?:build|clippy|test)\b|\bnode scripts\/nextest-run\.mjs\b/, `the command runs Cargo outside the link check: ${command}`);
   }
 });
+
+// A test that measures the allocations or the footprint of its process, as the tests of screen_allocations_test.rs and
+// frame_memory_test.rs do, requires that no other test runs in that process. make test runs each test in its own process
+// through cargo-nextest, so make repeat runs the tests through the same runner instead of cargo test, which runs the tests
+// of one binary in threads of one process (S202).
+test("make repeat runs each test in its own process through the runner of make test (S202)", { timeout: 30000 }, () => {
+  const lines = recipe("repeat", ["PACKAGE=soksak-sidecar-alacritty-core", "COUNT=1", "TEST=encoding_a_screen_line_does_not_copy_each_cell"]).split("\n");
+  assert.ok(!lines.some((line) => /\bcargo test\b/.test(line)), `make repeat runs cargo test:\n${lines.join("\n")}`);
+  const runs = lines.filter((line) => /\bnode scripts\/nextest-run\.mjs --config-file \.config\/nextest\.toml\b/.test(line));
+  assert.equal(runs.length, 1, `make repeat runs no cargo-nextest run:\n${lines.join("\n")}`);
+  assert.match(runs[0], / -p soksak-sidecar-alacritty-core /);
+  assert.match(runs[0], / -E 'test\(=encoding_a_screen_line_does_not_copy_each_cell\)'/);
+});
