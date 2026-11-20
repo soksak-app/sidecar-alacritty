@@ -1,5 +1,6 @@
 # Changelog
 
+- S221: engine 은 tag `alacritty_terminal_v0.26.0-soksak.2` 의 `alacritty_terminal` fork 가 부르는 listener 호출(`alt_screen_line_leaving`, `alt_screen_entering`, `alt_screen_leaving`, `docs/spec/alacritty-core.md#kept-rows-of-the-alternate-screen`)에서 alternate screen 의 위를 떠나는 행을 보존한다. alternate grid 는 history 를 두지 않으며, alternate screen 에서 입력의 slice 마다 주던 history 한도, `keep_alternate_rows`, `CSI ? 1049 h/l` 과 full reset 에서 입력을 나누는 일을 지운다. Red: tag `alacritty_terminal_v0.26.0-soksak.1` 에서 listener 가 compile 되지 않았다. Green: package 의 test 206 개가 바뀌지 않고 통과한다.
 - S217: module `handoff`(`alacritty-core/src/handoff.rs`)가 core `docs/spec/messaging.md#hand-off-record` 의 hand-off record `<task>.handoff.json` 을 현재 attempt 하나와 함께 읽고 쓰며, 이전 attempt 의 변경을 `stale-attempt` 로 거부한다.
 - S222: `messages.register` 가 없는 folder 를 없는 상위 folder 와 함께 만들고, 실패한 만들기를 `folder-create-failed` 로 거부한다(core `docs/spec/messaging.md#folder-of-a-terminal`).
 - S220: prompt 에서의 크기 변경은 prompt 행을 되돌려 놓은 뒤 cursor 를 많아야 마지막 열인 자기 열로 되돌린다(core `docs/spec/terminal-state.md#prompt-region`). 전에는 divider drag 의 각 크기 변경 뒤 바로 표시되는 화면이 zsh 가 다시 그릴 때까지 prompt 의 첫 칸 위의 cursor 를 보였다.
