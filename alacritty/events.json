@@ -435,6 +435,27 @@
           "draw_us": {
             "type": "number"
           },
+          "layout_us": {
+            "type": "number"
+          },
+          "cells_us": {
+            "type": "number"
+          },
+          "match_us": {
+            "type": "number"
+          },
+          "paint_us": {
+            "type": "number"
+          },
+          "compose_us": {
+            "type": "number"
+          },
+          "rows_drawn": {
+            "type": "number"
+          },
+          "hash_us": {
+            "type": "number"
+          },
           "raster": {
             "type": "string"
           },
@@ -450,7 +471,7 @@
           "hash"
         ]
       },
-      "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame. A screen sent without a raster is a frame record too, without draw_us, raster and image."
+      "description": "A frame of a surface was drawn: a frame record of core (docs/spec/replay.md). sequence is the sequence of the last input of the session that the screen includes, rows and cols the size of the screen, and hash the screen hash. image is the number of the image frame of the surface and raster its size in pixels, reason what caused the frame. draw_us is the time of the draw, which holds its steps: layout_us the layout of the cells, cells_us the serialization of the cells of each row, match_us the lookup of the strip of each row, paint_us the CoreGraphics draw of the rows that no strip holds (rows_drawn of them) and the copy of their pixels into the strips, and compose_us the composition of the strips, the inline images and the cursor into the raster; hash_us is the time of the screen hash of the record. A screen sent without a raster is a frame record too, with hash_us and without draw_us, its steps, raster and image."
     },
     "sidecar.alacritty.surface_mode": {
       "layer": "sidecar",

@@ -4,9 +4,13 @@
 // `released` when the next frame replaces it for a region in the lease mode. It prints one JSON line.
 //
 //   node scripts/benchmark-frame.mjs --service <binary> --answer consumed|leased --workload idle|statusline|fullscreen
-//     [--seconds <n>] [--sample <file>]
+//     [--seconds <n>] [--sample <file>] [--steps]
+//
+// --steps stores the frame records of the service (the class frame at debug, every other class at error) and adds the median of each step of the
+// draws of the measured interval to the line (alacritty/events.json, sidecar.alacritty.frame); the records add the time
+// of the screen hash to the CPU time of the service.
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,10 +27,30 @@ export const WORKLOADS = {
   fullscreen: "perl -e '$|=1;for(;;){$i++;print \"\\e[H\";for $r(1..20){printf \"\\e[38;5;%dm%s\\n\",16+($i+$r)%200,chr(97+($i+$r)%26)x60}select(undef,undef,undef,0.033)}'\n",
 };
 
+/** The step fields of a frame record of a draw, which the draw time `draw_us` holds, and the time of the screen hash. */
+export const STEPS = ["layout_us", "cells_us", "match_us", "paint_us", "compose_us", "rows_drawn", "hash_us"];
+
+/** The median of each step of the frame records in the event log text `text` from the time `since` (microseconds). */
+export function stepMedians(text, since) {
+  const frames = text.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line))
+    .filter((record) => record.event === "sidecar.alacritty.frame" && record.ts_us >= since && Number.isInteger(record.fields.draw_us));
+  if (frames.length === 0) throw new Error("the service stored no frame record with draw steps");
+  const median = (name) => {
+    const values = frames.map((record) => record.fields[name]).sort((a, b) => a - b);
+    return values[Math.floor(values.length / 2)];
+  };
+  return Object.fromEntries([["frames", frames.length], ...[...STEPS, "draw_us"].map((name) => [name, median(name)])]);
+}
+
 /** Reads the arguments of the command line; an unknown or a missing argument is an error. */
 export function parseArguments(argv) {
   const options = { seconds: 15 };
   for (let index = 0; index < argv.length; index += 2) {
+    if (argv[index] === "--steps") {
+      options.steps = true;
+      index -= 1;
+      continue;
+    }
     const [name, value] = [argv[index], argv[index + 1]];
     if (!["--service", "--answer", "--workload", "--seconds", "--sample"].includes(name)) throw new Error(`unknown argument ${name}`);
     if (value === undefined) throw new Error(`${name} requires a value`);
@@ -62,10 +86,18 @@ const within = (promise, what) => {
   return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
 };
 
+/** The text of the event files of the log folder `directory`. */
+function logText(directory) {
+  return readdirSync(directory).filter((name) => name.endsWith(".jsonl")).map((name) => readFileSync(join(directory, name), "utf8")).join("\n");
+}
+
 async function main(options) {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "frame-benchmark-")));
   mkdirSync(join(folder, "service"));
   mkdirSync(join(folder, "logs"));
+  if (options.steps) {
+    writeFileSync(join(folder, "log-policy.json"), JSON.stringify({ schema: 1, classes: { call: "error", frame: "debug", input: "error", io: "error", lifecycle: "error" } }));
+  }
   const service = spawn(options.service, ["--service-dir", join(folder, "service"), "--log-dir", join(folder, "logs")], { stdio: ["ignore", "pipe", "inherit"] });
   // A stop request ends the service and removes the folder, which the end of main does not reach.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
@@ -146,6 +178,7 @@ async function main(options) {
       cpu_percent: Number((cpu / elapsed * 100).toFixed(1)),
       cpu_ms_per_frame: count > 0 ? Number((cpu * 1000 / count).toFixed(2)) : null,
       footprint_mb: Number(footprint.toFixed(1)),
+      ...(options.steps ? { steps: stepMedians(logText(join(folder, "logs")), startedAt * 1000) } : {}),
     })}\n`);
     if (command && count === 0) throw new Error(`the workload ${options.workload} drew no frame`);
     if (command) input("\x03");

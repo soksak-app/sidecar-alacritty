@@ -72,12 +72,13 @@ test: build
 
 # Measures one workload on a built service: `make build`, then `make benchmark-frame WORKLOAD=fullscreen`. SERVICE names
 # another built terminal service, and ANSWER=consumed answers a service whose region is in the copy mode. The check prints
-# one JSON line with the CPU time and the footprint (scripts/benchmark-frame.mjs).
+# one JSON line with the CPU time and the footprint (scripts/benchmark-frame.mjs); STEPS=1 adds the median of each step of
+# the draws from the frame records.
 SERVICE ?= alacritty/build/sok-alacritty
 ANSWER ?= leased
 WORKLOAD ?= statusline
 benchmark-frame:
-	node scripts/benchmark-frame.mjs --service $(SERVICE) --answer $(ANSWER) --workload $(WORKLOAD)
+	node scripts/benchmark-frame.mjs --service $(SERVICE) --answer $(ANSWER) --workload $(WORKLOAD) $(if $(STEPS),--steps)
 
 # `FEATURES=diagnostics` enables the diagnostic service build; the runtime trace remains opt-in.
 # Uses alacritty/build/sok-alacritty, which sidecar.json points to.

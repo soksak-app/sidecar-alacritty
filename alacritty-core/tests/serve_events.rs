@@ -317,7 +317,35 @@ async fn a_served_surface_records_its_frames_with_reasons() {
             frame["fields"]["reason"].is_string() && frame["fields"]["draw_us"].is_u64(),
             "every frame carries a reason and a draw time: {frame}"
         );
+        // The draw time is attributed to its steps, which do not exceed it, and the record names
+        // the rows that the draw drew and the time of the screen hash.
+        let fields = &frame["fields"];
+        let steps = [
+            "layout_us",
+            "cells_us",
+            "match_us",
+            "paint_us",
+            "compose_us",
+        ];
+        let sum: u64 = steps
+            .iter()
+            .map(|name| fields[name].as_u64().unwrap_or(u64::MAX / 8))
+            .sum();
+        assert!(
+            sum <= fields["draw_us"].as_u64().unwrap_or(0)
+                && fields["rows_drawn"].is_u64()
+                && fields["hash_us"].is_u64(),
+            "every frame carries the times of the steps of its draw, the rows it drew and the time of its hash: {frame}"
+        );
     }
+    // Rows of equal cells share one strip, so the first frame draws at least one row and no more
+    // rows than the screen has.
+    let first = frames[0]["fields"]["rows_drawn"].as_u64().unwrap_or(0);
+    assert!(
+        first >= 1 && first <= frames[0]["fields"]["rows"].as_u64().unwrap_or(0),
+        "the first frame draws the rows of the screen: {}",
+        frames[0]
+    );
     // Each frame names its session, the number of its image (consecutive from 1 for a surface), the
     // size of its screen and the screen hash (the contents of the frame record are checked by the
     // test of the replay records).

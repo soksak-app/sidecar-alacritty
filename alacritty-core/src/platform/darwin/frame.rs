@@ -11,6 +11,18 @@ pub struct CMetrics {
     pub leading: f64,
 }
 
+/// The times of the steps of the last draw of a frame in nanoseconds and the count of rows that it drew (`FrameSteps` of
+/// frame.h).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameSteps {
+    pub cells_ns: u64,
+    pub match_ns: u64,
+    pub paint_ns: u64,
+    pub compose_ns: u64,
+    pub rows: u32,
+}
+
 #[repr(C)]
 pub struct CFrameFont {
     _private: [u8; 0],
@@ -259,6 +271,7 @@ unsafe extern "C" {
     fn frame_release(frame: *mut CFrame, id: u32) -> i32;
     #[cfg(feature = "diagnostics")]
     fn frame_strips_drawn(frame: *mut CFrame) -> u32;
+    fn frame_steps(frame: *mut CFrame, out: *mut FrameSteps);
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
     fn frame_draw_with_inline_images(
@@ -489,6 +502,13 @@ impl Frame {
             width: width_px,
             height: height_px,
         })
+    }
+
+    /// The step times of the last draw.
+    pub fn steps(&self) -> FrameSteps {
+        let mut steps = FrameSteps::default();
+        unsafe { frame_steps(self.ptr, &mut steps) };
+        steps
     }
 
     /// The count of strips that the last draw of a strip frame drew.

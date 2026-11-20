@@ -1,5 +1,6 @@
 # Changelog
 
+- S236: raster의 frame 기록 `sidecar.alacritty.frame`은 그리기 단계의 시간(`layout_us`, `cells_us`, `match_us`, `paint_us`, `compose_us`), 그린 행(`rows_drawn`), screen hash 시간(`hash_us`)을 담는다. `make benchmark-frame STEPS=1`은 단계마다 중앙값을 보고한다. 검증: 바뀌지 않은 코드에서 `a_served_surface_records_its_frames_with_reasons`와 `tests/benchmark-frame.test.mjs`의 Red, 그 뒤 둘의 Green, `make repeat`로 Rust 시험 5회 중 5회, clippy, `sok-check events`.
 - S234: `alacritty/tests/shell_redraw_test.rs`가 S228이 첫 parameter를 바꾼 `PtyService::open_shell`에 `ShellOwner`를 넘기므로, test가 다시 compile된다. 검증: compile error E0308의 Red, 그 뒤 `shell_redraw_test`의 8개 test와 clippy의 Green.
 - S233: process의 argument 개수와 OSC 7501 record의 progress를 error를 버리지 않고 읽고, process watch의 kqueue를 deprecated `AsyncFd::with_interest` 대신 `AsyncFd::register_with_interest`로 등록하므로, `sok-check events`와 clippy가 통과한다. 검증: 두 finding이 있는 `sok-check events`와 deprecation이 있는 clippy의 Red, 그 뒤 둘과 `program_status_test`, `process_list_test`, `serve_contract`의 process test의 Green.
 - S232: `exited` 뒤의 `idle` 상태가 다음 `running`까지 그 command의 exit code를 지닌다(core `docs/spec/terminal-state.md#change-event`). 그래서 `shell.state.read`는 실패한 command 뒤에 attach하는 page에 그 실패를 준다. core의 공유 case를 다시 복사했다. 검증: 바뀌지 않은 tracker에서 `shell_state_test`의 Red(`D;0` 뒤 `idle`의 exit code `null`), 그 뒤 `shell_state_test`, `program_status_test`, `engine_test`의 Green.
