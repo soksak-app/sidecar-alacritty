@@ -1,5 +1,6 @@
 # Changelog
 
+- S219: Each drawing state of a region ends the frame request of the surface, so a change after the region draws again requests its frame; a request that the host accepted while the region did not draw kept every later change of the surface from being drawn without input until the next resize.
 - S215: A resize of the alternate screen no longer brings back rows of earlier renders: the engine returns the history limit of the alternate grid to zero after every slice of output, so a smaller height cuts rows off and a larger height adds blank rows as `alacritty_terminal` does; the limit that S205-2 left on the grid after a slice without a scroll moved the cut rows back onto the screen of a full-screen program.
 - S211: `alacritty/tests/wheel_routes_test.rs` runs the shared cases of the wheel routes of core `docs/spec/terminal-read.md#wheel-input` through the real engine, the wheel route of the service, a real PTY and a real program; both tests pass on the unchanged sidecar.
 - S207: The answer of an OSC query that the engine answers (OSC 5, 17 and 19) follows the answers to the queries before it in the same output, and the other events of such an OSC follow the events of the output before it: the engine passes the output up to the end of the OSC to the library before it acts on the OSC.

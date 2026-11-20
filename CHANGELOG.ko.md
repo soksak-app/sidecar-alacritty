@@ -1,5 +1,6 @@
 # Changelog
 
+- S219: region 의 각 drawing 상태가 surface 의 frame 요청을 끝내므로, region 이 다시 그린 뒤의 변경이 자기 frame 을 요청한다. 전에는 region 이 그리지 않는 동안 host 가 받아들인 요청 때문에 surface 의 뒤의 모든 변경이 다음 크기 변경까지 입력 없이는 그려지지 않았다.
 - S215: alternate screen 의 resize 가 더 이상 이전 render 의 행을 되돌리지 않는다. engine 이 출력의 slice 마다 alternate grid 의 history 한도를 0 으로 되돌리므로 `alacritty_terminal` 처럼 작은 높이는 행을 잘라내고 큰 높이는 빈 행을 더한다. S205-2 가 scroll 없는 slice 뒤에 grid 에 남긴 한도가 잘린 행을 full-screen program 의 화면으로 되돌렸다.
 - S211: `alacritty/tests/wheel_routes_test.rs` 가 core `docs/spec/terminal-read.md#wheel-input` 의 wheel route 공유 case 를 실제 engine, service 의 wheel route, 실제 PTY, 실제 program 으로 실행한다. 바뀌지 않은 sidecar 에서 두 test 가 통과한다.
 - S207: engine 이 답하는 OSC 질의(OSC 5, 17, 19)의 답이 같은 출력에서 그 앞의 질의의 답 뒤에 오고, 그런 OSC 의 다른 이벤트도 그 앞의 출력의 이벤트 뒤에 온다. engine 은 OSC 에 대해 행동하기 전에 OSC 의 끝까지의 출력을 library 에 넘긴다.
