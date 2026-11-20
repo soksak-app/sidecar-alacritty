@@ -37,8 +37,11 @@ impl ProcessWatch {
         // SAFETY: kqueue returned a new descriptor that nothing else owns.
         let queue = unsafe { OwnedFd::from_raw_fd(queue) };
         // A kqueue descriptor reports only readiness to read; the system refuses a write filter for it.
-        let queue = AsyncFd::with_interest(queue, tokio::io::Interest::READABLE)
-            .map_err(|error| format!("register the process watch: {error}"))?;
+        // SAFETY: the watch owns the descriptor in the OwnedFd, which the AsyncFd holds and closes only when it is dropped, so
+        // the descriptor stays open and names the same kqueue for the lifetime of the AsyncFd.
+        let queue =
+            unsafe { AsyncFd::register_with_interest(queue, tokio::io::Interest::READABLE) }
+                .map_err(|error| format!("register the process watch: {error}"))?;
         Ok(ProcessWatch {
             queue,
             watched: BTreeSet::new(),
