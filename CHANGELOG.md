@@ -1,5 +1,6 @@
 # Changelog
 
+- S220: A resize at a prompt puts the cursor back at its column, at most the last column, after it puts the prompt rows back (core `docs/spec/terminal-state.md#prompt-region`); the screen presented at once after each resize of a divider drag showed the prompt with the cursor on its first cell until zsh drew again.
 - S219: Each drawing state of a region ends the frame request of the surface, so a change after the region draws again requests its frame; a request that the host accepted while the region did not draw kept every later change of the surface from being drawn without input until the next resize.
 - S215: A resize of the alternate screen no longer brings back rows of earlier renders: the engine returns the history limit of the alternate grid to zero after every slice of output, so a smaller height cuts rows off and a larger height adds blank rows as `alacritty_terminal` does; the limit that S205-2 left on the grid after a slice without a scroll moved the cut rows back onto the screen of a full-screen program.
 - S211: `alacritty/tests/wheel_routes_test.rs` runs the shared cases of the wheel routes of core `docs/spec/terminal-read.md#wheel-input` through the real engine, the wheel route of the service, a real PTY and a real program; both tests pass on the unchanged sidecar.
