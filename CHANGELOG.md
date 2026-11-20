@@ -1,6 +1,7 @@
 # Changelog
 
 - S217: The module `handoff` (`alacritty-core/src/handoff.rs`) reads and writes the hand-off record `<task>.handoff.json` of core `docs/spec/messaging.md#hand-off-record` with one current attempt and refuses a change of an earlier attempt with `stale-attempt`.
+- S222: `messages.register` creates a missing folder with its missing parents and refuses a failed creation with `folder-create-failed` (core `docs/spec/messaging.md#folder-of-a-terminal`).
 - S220: A resize at a prompt puts the cursor back at its column, at most the last column, after it puts the prompt rows back (core `docs/spec/terminal-state.md#prompt-region`); the screen presented at once after each resize of a divider drag showed the prompt with the cursor on its first cell until zsh drew again.
 - S219: Each drawing state of a region ends the frame request of the surface, so a change after the region draws again requests its frame; a request that the host accepted while the region did not draw kept every later change of the surface from being drawn without input until the next resize.
 - S215: A resize of the alternate screen no longer brings back rows of earlier renders: the engine returns the history limit of the alternate grid to zero after every slice of output, so a smaller height cuts rows off and a larger height adds blank rows as `alacritty_terminal` does; the limit that S205-2 left on the grid after a slice without a scroll moved the cut rows back onto the screen of a full-screen program.
