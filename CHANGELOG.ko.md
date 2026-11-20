@@ -1,5 +1,6 @@
 # Changelog
 
+- S205: 체크리스트가 S205를 완료로 표시한다. 그 항목 S205-1부터 S205-5까지 완료되었다.
 - S225: release 행이 완료되었다. release v0.0.8 이 S224 의 process list 를 담는다.
 - S250: 정책 파일과 `endpoint.json` 감시를 직접 작성한 kqueue에서 crate `notify`로 옮기는 일을 등록한다. 이 행은 endpoint 종료 이유 행이 이미 쓰는 ID S189로 쓰여 있었다.
 - S249: `messages.notice`가 받는 surface의 완료 notice를 보낸 쪽 folder에 `<surface>.notice-<answers>.txt`로 쓴다. Text는 core docs/spec/messaging.md#completion-notice의 것이며, message의 쓰기 규칙을 따른다. 잘못된 parameter, 보낸 쪽 folder가 없는 경우, 등록되지 않은 surface는 파일 없이 거부한다. 영수증 file은 받는 folder의 일반 message로 읽히므로 sidecar 변경이 필요 없다. 검증: `alacritty-core/tests/serve_contract.rs`의 `messages_notice_*` 계약 test에서 Red 뒤 Green, 전체 `soksak-sidecar-alacritty-core` suite.

@@ -1,5 +1,6 @@
 # Changelog
 
+- S205: The checklist marks S205 complete, whose items S205-1 to S205-5 are complete.
 - S225: The release row is complete: the release v0.0.8 contains the process list of S224.
 - S250: Registers the move of the policy file and `endpoint.json` watch from the hand-written kqueue to the crate `notify`; the row was written under the ID S189, which the endpoint exit reason row already holds.
 - S249: `messages.notice` writes the completion notice of a receiving surface into the folder of its sender as `<surface>.notice-<answers>.txt`, with the text of core docs/spec/messaging.md#completion-notice, by the write rule of a message; invalid parameters, a missing sender folder and an unregistered surface are refused with no file. A receipt file of the receiving folder is read as an ordinary message, so the sidecar needs no change for it. Verification: Red then Green of the `messages_notice_*` contract tests in `alacritty-core/tests/serve_contract.rs`, and the full `soksak-sidecar-alacritty-core` suite.
