@@ -7,7 +7,7 @@ mod engine;
 
 use engine::AlacrittyEngine;
 use soksak_sidecar_alacritty_core::events::{EventLog, Options};
-use soksak_sidecar_alacritty_core::pty::PtyService;
+use soksak_sidecar_alacritty_core::pty::{PtyService, ShellOwner};
 use soksak_sidecar_alacritty_core::{DaemonEvent, Engine, EngineEvent, Screen};
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
@@ -150,7 +150,17 @@ fn open(shell: &str, variable: &str, directory: &Path) -> Session {
         Some(directory.as_os_str().to_os_string()),
     )]);
     let (tx, rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", shell, None, 60, 12, tx);
+    let opened = service.open_shell(
+        ShellOwner {
+            owner: "",
+            surface: "",
+        },
+        shell,
+        None,
+        60,
+        12,
+        tx,
+    );
     let id = opened.expect("open a shell session");
     let mut engine = AlacrittyEngine::new();
     engine.resize(60, 12);

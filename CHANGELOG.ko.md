@@ -1,5 +1,6 @@
 # Changelog
 
+- S234: `alacritty/tests/shell_redraw_test.rs`가 S228이 첫 parameter를 바꾼 `PtyService::open_shell`에 `ShellOwner`를 넘기므로, test가 다시 compile된다. 검증: compile error E0308의 Red, 그 뒤 `shell_redraw_test`의 8개 test와 clippy의 Green.
 - S233: process의 argument 개수와 OSC 7501 record의 progress를 error를 버리지 않고 읽고, process watch의 kqueue를 deprecated `AsyncFd::with_interest` 대신 `AsyncFd::register_with_interest`로 등록하므로, `sok-check events`와 clippy가 통과한다. 검증: 두 finding이 있는 `sok-check events`와 deprecation이 있는 clippy의 Red, 그 뒤 둘과 `program_status_test`, `process_list_test`, `serve_contract`의 process test의 Green.
 - S232: `exited` 뒤의 `idle` 상태가 다음 `running`까지 그 command의 exit code를 지닌다(core `docs/spec/terminal-state.md#change-event`). 그래서 `shell.state.read`는 실패한 command 뒤에 attach하는 page에 그 실패를 준다. core의 공유 case를 다시 복사했다. 검증: 바뀌지 않은 tracker에서 `shell_state_test`의 Red(`D;0` 뒤 `idle`의 exit code `null`), 그 뒤 `shell_state_test`, `program_status_test`, `engine_test`의 Green.
 - S229: 기다리는 `messages.wait`는 요청 단계 `event`에 있으며, 진행 중인 요청의 watch는 그 단계를 기록하지 않으므로, 10초보다 긴 wait는 `request_waiting`을 쓰지 않는다(`docs/spec/alacritty-core.md`).
