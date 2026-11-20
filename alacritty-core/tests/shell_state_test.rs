@@ -53,7 +53,7 @@ fn each_change_of_the_state_is_one_transition_numbered_from_one() {
             from: Some(ShellState::Exited),
             to: ShellState::Idle,
             sequence: 4,
-            exit: None
+            exit: Some(3)
         }))
     );
 }

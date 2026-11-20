@@ -1,5 +1,6 @@
 # Changelog
 
+- S247: shell state unit test는 실패한 command 다음의 `idle` state가 S232가 정의하는 대로 exit code를 유지한다고 기대한다. Red: test가 `exit: Some(3)`와 `exit: None`으로 실패했다. Green: 통과한다.
 - S246: version은 0.0.8이고 kit pin은 kit release 0.0.16이므로, tag v0.0.7 이후의 commit을 release run이 v0.0.8로 게시한다.
 - S245: pre-push hook이 돌리는 `make check-push`가 `cargo fmt --all --check`를 돌리므로, format되지 않은 Rust source의 push는 main에 닿기 전에 거부된다. 검증: `tests/make-targets.test.mjs`의 `make check-push` test의 Red와 format되지 않은 줄을 둔 commit에서 통과한 `make check-push`, 그 뒤 test의 Green, 그 commit에서 실패한 `make check-push`, 되돌린 뒤 통과한 `make check-push`.
 - S238: strip frame은 target이 자기 마지막 그리기에서 지닌 것과 다른 strip의 행, 없으면 여백, 바뀐 사각형 아래 행만 target에 합성하고, frame 기록은 `rows_composed`를 지닌다. 검증: 바뀐 행 하나에 합성한 행 3개로 `a_target_composes_only_the_rows_that_differ_from_its_last_draw`의 Red, 그 뒤 1개로 Green, frame과 service test. `make benchmark-frame WORKLOAD=statusline STEPS=1`의 `compose_us` 중앙값이 419–999에서 10–11 µs로 줄었다.

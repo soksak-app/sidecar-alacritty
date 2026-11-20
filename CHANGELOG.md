@@ -1,5 +1,6 @@
 # Changelog
 
+- S247: The shell state unit test expects the `idle` state after a failed command to keep its exit code, as S232 defines. Red: the test failed with `exit: Some(3)` against `exit: None`. Green: it passes.
 - S246: The version is 0.0.8, and the kit pin is the kit release 0.0.16, so the release run publishes the commits after the tag v0.0.7 as v0.0.8.
 - S245: `make check-push`, which the pre-push hook runs, runs `cargo fmt --all --check`, so a push of an unformatted Rust source is refused before it reaches main. Verification: Red of the `make check-push` test of `tests/make-targets.test.mjs` and a passing `make check-push` on a commit with an unformatted line, then Green of the test, a failing `make check-push` on that commit and a passing one after its revert.
 - S238: A strip frame composes into a target only the rows whose strips differ from those that the target holds from its own last draw, the margin when it lacks it and the rows under changed rectangles, and the frame record carries `rows_composed`. Verification: Red of `a_target_composes_only_the_rows_that_differ_from_its_last_draw` with 3 composed rows for one changed row, then Green with 1, and the frame and service tests; the median `compose_us` of `make benchmark-frame WORKLOAD=statusline STEPS=1` fell from 419–999 to 10–11 µs.
