@@ -14,6 +14,7 @@ pub mod palette;
 pub mod platform;
 pub mod policy;
 pub mod process_list;
+pub mod program_status;
 pub mod protocol;
 pub mod pty;
 pub mod screen_hash;
