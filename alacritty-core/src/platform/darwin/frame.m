@@ -63,6 +63,9 @@ struct Frame {
     uint32_t strips_drawn;
     // The step times of the last draw.
     FrameSteps steps;
+    // Whether row_slots holds the strip of each row of the last draw, which ended without an error, so a row that did not
+    // change since keeps its strip (S237).
+    uint8_t rows_valid;
     // The count of the objects that the CoreGraphics draws of the frame created: bitmap contexts, fonts, color spaces and
     // default colors.
     uint32_t paint_creations;
@@ -803,12 +806,14 @@ static void strip_store_clear(Frame *frame) {
         frame->slot_used[slot] = 0;
     }
     frame->margin_filled = 0;
+    frame->rows_valid = 0;
 }
 
 // Sizes an empty store for a configuration: two slots for each screen row that the frame shows, a slot of the cell height,
 // and the margin from the end of the rows to the frame height. Returns -1 when an allocation fails.
 static int strip_store_reset(Frame *frame, Screen *screen, Metrics *metrics) {
     strip_store_free(frame);
+    frame->rows_valid = 0;
     if (metrics->cell_height == 0) return -1;
     uint64_t rows_height = (uint64_t)screen->height * metrics->cell_height;
     uint32_t shown = (uint32_t)MIN((uint64_t)screen->height,
@@ -1014,11 +1019,21 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         if (strip_store_reset(frame, screen, metrics) != 0) return -1;
         frame->configuration = (__bridge_retained void *)configuration;
     }
-    NSMutableArray<NSMutableData *> *cells = [NSMutableArray arrayWithCapacity:screen->height];
-    for (uint32_t row = 0; row < screen->height; row++) [cells addObject:[NSMutableData data]];
+    // A row that did not change since the last draw keeps its strip, and its cells are not serialized. The last draw has
+    // the configuration of this one, because a change of the configuration emptied the store and row_slots.
+    const uint8_t *changed = frame->rows_valid ? screen->rows_changed : NULL;
+    frame->rows_valid = 0;
+    NSMutableArray *cells = [NSMutableArray arrayWithCapacity:screen->height];
+    uint32_t serialized_rows = 0;
+    for (uint32_t row = 0; row < screen->height; row++) {
+        BOOL kept = changed && !changed[row];
+        [cells addObject:kept ? (id)[NSNull null] : (id)[NSMutableData data]];
+        if (!kept) serialized_rows++;
+    }
     for (uint32_t i = 0; i < screen->cell_count; i++) {
         Cell *cell = &screen->cells[i];
         if (cell->row >= screen->height) return -1;
+        if (changed && !changed[cell->row]) continue;
         NSMutableData *data = cells[cell->row];
         serialize_append(data, &cell->col, sizeof(cell->col));
         serialize_append(data, &cell->width, sizeof(cell->width));
@@ -1029,6 +1044,7 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         uint8_t flags[4] = {cell->has_fg, cell->has_bg, cell->inverse, cell->underline};
         serialize_append(data, flags, sizeof(flags));
     }
+    frame->steps.serialized = serialized_rows;
     frame->draws++;
     uint64_t serialized = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     frame->steps.cells_ns = serialized - started;
@@ -1036,7 +1052,12 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     NSMutableData *selection = [NSMutableData dataWithLength:screen->height];
     uint8_t *rows = selection.mutableBytes;
     uint32_t count = 0;
+    // The kept rows mark their slots first, so a changed row never takes a slot that a kept row shows.
+    for (uint32_t row = 0; changed && row < screen->height; row++) {
+        if (!changed[row] && frame->row_slots[row] != NO_SLOT) frame->slot_used[frame->row_slots[row]] = frame->draws;
+    }
     for (uint32_t row = 0; row < screen->height; row++) {
+        if (changed && !changed[row]) continue;
         // The pixel rows of this row inside the frame; a row below the frame has none and takes no slot.
         uint64_t top = (uint64_t)row * frame->slot_height;
         uint32_t shown = top >= frame->height ? 0 : (uint32_t)MIN((uint64_t)frame->slot_height, frame->height - top);
@@ -1114,6 +1135,7 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     }
     int composed = frame_compose(frame, rects);
     if (composed != 0) return composed;
+    frame->rows_valid = 1;
     frame->steps.compose_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - drawn;
     return 0;
 }

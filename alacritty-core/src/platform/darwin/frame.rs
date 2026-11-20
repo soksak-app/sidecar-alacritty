@@ -21,6 +21,7 @@ pub struct FrameSteps {
     pub paint_ns: u64,
     pub compose_ns: u64,
     pub rows: u32,
+    pub serialized: u32,
 }
 
 #[repr(C)]
@@ -240,6 +241,7 @@ pub struct CScreen {
     pub default_background: [u8; 3],
     pub default_cursor: [u8; 3],
     pub cursor_width: u32,
+    pub rows_changed: *const u8,
 }
 
 #[repr(C)]
@@ -306,6 +308,9 @@ pub struct Frame {
     ptr: *mut CFrame,
     width: u32,
     height: u32,
+    /// The rows of the last draw that ended without an error, which the next draw compares its rows with, so the native
+    /// draw serializes only the rows that changed (S237). It is empty before the first draw and after a failed one.
+    drawn_rows: std::sync::Mutex<Vec<Vec<crate::protocol::Cell>>>,
 }
 
 fn core_graphics_rect_to_top_left(frame_height: f64, rect: [f64; 4]) -> [f64; 4] {
@@ -488,6 +493,7 @@ impl Frame {
                     ptr,
                     width: width_px,
                     height: height_px,
+                    drawn_rows: std::sync::Mutex::default(),
                 })
             }
         }
@@ -503,6 +509,7 @@ impl Frame {
             ptr,
             width: width_px,
             height: height_px,
+            drawn_rows: std::sync::Mutex::default(),
         })
     }
 
@@ -692,6 +699,28 @@ impl Frame {
             .min(remaining);
         let effective_shape =
             effective_cursor_shape(cursor.shape, cursor.focused, cursor.unfocused);
+        // A row is changed when its cells differ from that row of the last draw; a screen of another row count changes
+        // every row. The comparison reads the cells that the native draw receives: the damage of the terminal engine
+        // does not cover a change of the selection, the viewport or the preedit, which changes the drawn cells too.
+        let mut drawn = self
+            .drawn_rows
+            .lock()
+            // default: a draw that panicked while it held the lock may have left rows of another draw, so this draw
+            // empties them and serializes every row; the panic hook recorded the panic.
+            .unwrap_or_else(|poisoned| {
+                self.drawn_rows.clear_poison();
+                let mut rows = poisoned.into_inner();
+                rows.clear();
+                rows
+            });
+        // The native draw reads one byte for each of the rows of the screen, which may be more than its lines: a row
+        // without a line has no cells.
+        let rows = render_screen.rows as usize;
+        let line = |row: usize| render_screen.lines.get(row).map_or(&[][..], Vec::as_slice);
+        let same_rows = drawn.len() == rows;
+        let rows_changed: Vec<u8> = (0..rows)
+            .map(|row| u8::from(!same_rows || drawn[row] != line(row)))
+            .collect();
         let mut c_screen = CScreen {
             width: render_screen.cols as u32,
             height: render_screen.rows as u32,
@@ -712,6 +741,7 @@ impl Frame {
             default_background,
             default_cursor: theme.cursor,
             cursor_width,
+            rows_changed: rows_changed.as_ptr(),
         };
 
         let mut c_metrics = CMetrics {
@@ -779,6 +809,19 @@ impl Frame {
             )
         };
 
+        if result == 0 {
+            if !same_rows {
+                *drawn = vec![Vec::new(); rows];
+            }
+            for (row, changed) in rows_changed.iter().enumerate() {
+                if *changed != 0 {
+                    drawn[row] = line(row).to_vec();
+                }
+            }
+        } else {
+            drawn.clear();
+        }
+        drop(drawn);
         match result {
             0 => {}
             -3 => return Err("the strip frame collects no render metadata".to_string()),

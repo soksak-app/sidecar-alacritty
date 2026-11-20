@@ -2294,6 +2294,7 @@ fn record_frame(
         fields["paint_us"] = json!(draw.steps.paint_ns / 1000);
         fields["compose_us"] = json!(draw.steps.compose_ns / 1000);
         fields["rows_drawn"] = json!(draw.steps.rows);
+        fields["rows_serialized"] = json!(draw.steps.serialized);
         fields["raster"] = json!(draw.raster);
         fields["image"] = json!(draw.image);
     }

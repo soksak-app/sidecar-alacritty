@@ -49,6 +49,9 @@ typedef struct {
     uint8_t default_background[3];
     uint8_t default_cursor[3];
     uint32_t cursor_width; // 커서 위치 글자가 차지하는 칸 수. 넓은 글자는 2 다.
+    // One byte for each row, nonzero for a row whose cells differ from that row of the previous draw of the frame, or NULL
+    // when every row may differ. A strip frame keeps the strip of each other row without serializing its cells.
+    const uint8_t *rows_changed;
 } Screen;
 
 typedef struct {
@@ -129,6 +132,8 @@ typedef struct {
     uint64_t paint_ns;
     uint64_t compose_ns;
     uint32_t rows;
+    // The count of rows whose cells the draw serialized to look up their strips.
+    uint32_t serialized;
 } FrameSteps;
 void frame_steps(Frame *frame, FrameSteps *out);
 #ifdef SOKSAK_DIAGNOSTICS

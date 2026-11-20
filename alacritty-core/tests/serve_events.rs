@@ -334,8 +334,9 @@ async fn a_served_surface_records_its_frames_with_reasons() {
         assert!(
             sum <= fields["draw_us"].as_u64().unwrap_or(0)
                 && fields["rows_drawn"].is_u64()
+                && fields["rows_serialized"].is_u64()
                 && fields["hash_us"].is_u64(),
-            "every frame carries the times of the steps of its draw, the rows it drew and the time of its hash: {frame}"
+            "every frame carries the times of the steps of its draw, the rows it drew and serialized and the time of its hash: {frame}"
         );
     }
     // Rows of equal cells share one strip, so the first frame draws at least one row and no more
