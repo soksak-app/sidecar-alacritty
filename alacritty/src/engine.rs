@@ -865,6 +865,10 @@ pub struct AlacrittyEngine {
     synchronized: Vec<u8>,
     /// The deadline of the held update; None while no update is held.
     synchronized_deadline: Option<tokio::time::Instant>,
+    /// The number of synchronized updates that the output opened, and the number of the update whose reset ended the last
+    /// output, or None when the last output did not end with a reset (core docs/spec/terminal-read.md#draw-of-the-program-scroll).
+    synchronized_opened: u64,
+    synchronized_end: Option<u64>,
     /// Set while the engine processes the output of an update that ended, where an opening
     /// sequence does not open a new update.
     releasing: bool,
@@ -925,6 +929,8 @@ impl AlacrittyEngine {
             alternate_left: Vec::new(),
             synchronized: Vec::new(),
             synchronized_deadline: None,
+            synchronized_opened: 0,
+            synchronized_end: None,
             releasing: false,
         }
     }
@@ -1743,6 +1749,7 @@ impl AlacrittyEngine {
                     self.advance(&input[from..at]);
                     self.processor.stop_sync(&mut self.term);
                     if !self.releasing {
+                        self.synchronized_opened += 1;
                         self.synchronized_deadline =
                             Some(tokio::time::Instant::now() + SYNCHRONIZED_UPDATE_TIMEOUT);
                     }
@@ -1882,6 +1889,7 @@ impl AlacrittyEngine {
     /// open. Each output between two holds is scanned in turn, so an input of many updates uses no
     /// recursion.
     fn feed_output(&mut self, bytes: &[u8]) {
+        self.synchronized_end = None;
         let mut held = if self.synchronized_deadline.is_some() {
             Some(bytes.to_vec())
         } else {
@@ -1921,6 +1929,8 @@ impl AlacrittyEngine {
             let end = start + close + length;
             let rest = self.synchronized.split_off(end);
             self.end_synchronized();
+            // An output that ends with the reset ends a frame of the program; any output after it starts the next one.
+            self.synchronized_end = rest.is_empty().then_some(self.synchronized_opened);
             return Some(rest);
         }
         if added
@@ -2404,6 +2414,14 @@ impl Engine for AlacrittyEngine {
 
     fn feed(&mut self, bytes: &[u8]) {
         self.feed_output(bytes);
+    }
+
+    fn synchronized_opened(&self) -> u64 {
+        self.synchronized_opened
+    }
+
+    fn synchronized_end(&self) -> Option<u64> {
+        self.synchronized_end
     }
 
     fn drain_events(&mut self) -> Vec<EngineEvent> {
