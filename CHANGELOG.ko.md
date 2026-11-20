@@ -1,5 +1,6 @@
 # Changelog
 
+- S244: frame 기록은 그리기의 target, pool의 target 수, 선택 때 host가 쥔 target과 in use인 target의 수를 지닌다. pool이 표면 7개로 커진 일은 pool의 재사용 규칙으로 검증하고 닫았다. 검증: `targets`가 없는 `a_served_surface_records_its_frames_with_reasons`의 Red, 그 뒤 Green, `serve_events`, `frame_strip_test`, `frame_test`. lease mode에서 host는 모든 그리기에서 target 1개를 쥐었고, pool은 다른 target이 in use인 그리기에서만 커졌다.
 - S243: `soksak-sidecar-alacritty-core`의 lib test target이 빌드된다. lifecycle test session이 `surface_process: None`을 명시한다. 이 child는 어떤 surface에도 속하지 않기 때문이다.
 - S242: live session이 있는 상주 service는 client가 떠난 뒤 `shutdown`으로 끝난다. 연결은 session의 monitor를 기다리지 않고, 끝난 연결의 sender는 session이 보관하지 않는다(core `docs/spec/persistent-services.md#service-transport`).
 - S241: `open_program_test`는 session 디렉터리가 없는 상대 프로그램을 다룬다. service는 자신의 `HOME`을 가진 child 프로세스로 실행되고, 프로그램은 그 home 폴더에서 찾는다.

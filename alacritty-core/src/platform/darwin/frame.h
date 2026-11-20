@@ -134,6 +134,13 @@ typedef struct {
     uint32_t rows;
     // The count of rows whose cells the draw serialized to look up their strips.
     uint32_t serialized;
+    // The pool at the selection of the target of the draw: the identifier of the selected target, the count of targets
+    // after the selection, and of the targets before the selection the count that the host held and the count of the others
+    // that were in use.
+    uint32_t target;
+    uint32_t targets;
+    uint32_t targets_held;
+    uint32_t targets_in_use;
 } FrameSteps;
 void frame_steps(Frame *frame, FrameSteps *out);
 #ifdef SOKSAK_DIAGNOSTICS

@@ -1153,6 +1153,10 @@ uint32_t frame_paint_creations(Frame *frame) {
 // Selects the target of the next draw: the current one when it is neither held nor in use, otherwise another such target,
 // otherwise a new target. The draw never waits for a surface.
 static int frame_select_target(Frame *frame) {
+    for (uint32_t index = 0; index < frame->target_count; index++) {
+        if (frame->targets[index].held) frame->steps.targets_held++;
+        else if (IOSurfaceIsInUse(frame->targets[index].surface)) frame->steps.targets_in_use++;
+    }
     for (uint32_t step = 0; step < frame->target_count; step++) {
         uint32_t index = (frame->current + step) % frame->target_count;
         FrameTarget *target = &frame->targets[index];
@@ -1199,12 +1203,14 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
                                   InlineImageRaster *images, uint32_t image_count,
                                   RenderOutput *render_output) {
     if (!frame || !screen || !metrics) return -1;
+    frame->steps = (FrameSteps){0};
     int selected = frame_select_target(frame);
     if (selected != 0) return selected;
+    frame->steps.target = frame->surface_id;
+    frame->steps.targets = frame->target_count;
     // The caller is a thread without an autorelease pool, so the objects that a draw autoreleases are released when it
     // returns instead of at the end of the thread: -bytes of an NSMutableData autoreleases the data, and a strip draw reads
     // the bytes of each serialized row.
-    frame->steps = (FrameSteps){0};
     @autoreleasepool {
         if (frame->strip) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
         uint64_t started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
