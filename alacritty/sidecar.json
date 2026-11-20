@@ -2,6 +2,7 @@
   "executable": "build/sok-alacritty",
   "displayName": "soksak://sidecar/alacritty",
   "protocol": 1,
+  "processes": true,
   "transport": "persistent",
   "events": "events.json",
   "replay": {

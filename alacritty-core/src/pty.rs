@@ -65,6 +65,31 @@ const OUTPUT_CHUNKS: usize = 16;
 /// would exceed it is refused. The bound passes a paste far larger than a person pastes and bounds
 /// what a stuck session holds.
 const QUEUED_INPUT_BYTES: usize = 64 * 1024 * 1024;
+/// The surface process of the child that `surface` owns: its start time from the process table. A child whose start cannot be
+/// read is ended and reaped before the error is returned, because the service cannot answer a query for it.
+fn surface_process_of(surface: &str, child: &mut dyn Child) -> Result<SurfaceProcess, String> {
+    let started = child
+        .process_id()
+        .ok_or_else(|| format!("start the process of {surface}: the child has no process id"))
+        .and_then(|pid| {
+            crate::platform::darwin::process_info::start(pid as i32)
+                .map_err(|error| format!("start the process of {surface}: {error}"))
+        });
+    match started {
+        Ok(started) => Ok(SurfaceProcess {
+            surface: surface.to_string(),
+            started,
+        }),
+        Err(error) => {
+            let ended = child.kill().and_then(|()| child.wait().map(|_| ()));
+            Err(match ended {
+                Ok(()) => error,
+                Err(end) => format!("{error}; end the child: {end}"),
+            })
+        }
+    }
+}
+
 /// The shell `pid`, which is the session leader, and the device of its controlling terminal (core
 /// docs/spec/process-list.md#members).
 fn shell_terminal(pid: Option<u32>) -> Result<(i32, u32), String> {
@@ -131,6 +156,14 @@ pub struct PtyMeasurement {
     pub written: u64,
 }
 
+/// A process that a session started for a surface: the surface and the start time of the process in milliseconds since the
+/// Unix epoch, as the process table records it (core docs/spec/sidecars.md#process-identity).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceProcess {
+    pub surface: String,
+    pub started: u64,
+}
+
 /// The child of the session and the result of the reaper thread. Only the reaper thread reaps the
 /// child, and it reaps and records the result while holding this lock. Therefore, while reaped is
 /// None, the pid that the holder of this lock sees refers to this child.
@@ -156,6 +189,9 @@ struct Session {
     /// The bytes of queued input at which reads stop and input of a person is refused.
     input_bound: usize,
     child: Mutex<SessionChild>,
+    /// The surface and the start time of the child when the child belongs to a surface, read when the child started
+    /// (core docs/spec/sidecars.md#process-identity). None when no surface owns the child.
+    surface_process: Option<SurfaceProcess>,
     /// The reaper thread notifies after it records reaped of the child.
     child_reaped: Condvar,
     written_output: Mutex<u64>,
@@ -341,7 +377,7 @@ impl PtyService {
         let mut command = CommandBuilder::new(program);
         self.apply_environment(&mut command);
         command.args(args);
-        self.spawn_owned("", command, cwd, cols, rows, events)
+        self.spawn_owned("", "", command, cwd, cols, rows, events)
     }
 
     /// Starts the shell path `shell`, which is already checked, as a login shell (argv[0] is `-`
@@ -360,12 +396,14 @@ impl PtyService {
         apply_surface_environment(&mut command, owner);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
-        self.spawn_owned(owner.owner, command, cwd, cols, rows, events)
+        self.spawn_owned(owner.owner, owner.surface, command, cwd, cols, rows, events)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_owned(
         &self,
         owner: &str,
+        surface: &str,
         mut command: CommandBuilder,
         cwd: Option<&str>,
         cols: u16,
@@ -390,10 +428,15 @@ impl PtyService {
         #[cfg(target_os = "macos")]
         apply_shell_locale(&mut command, &self.log);
 
-        let child = pair
+        let mut child = pair
             .slave
             .spawn_command(command)
             .map_err(|error| format!("spawn PTY session: {error}"))?;
+        let surface_process = if surface.is_empty() {
+            None
+        } else {
+            Some(surface_process_of(surface, child.as_mut())?)
+        };
         let process_group = process_group_leader(pair.master.as_ref());
         // The child sets its session and its controlling terminal before its program starts, and the spawn returns after
         // the start, so the device is set.
@@ -424,6 +467,7 @@ impl PtyService {
                 child,
                 reaped: None,
             }),
+            surface_process,
             child_reaped: Condvar::new(),
             written_output: Mutex::new(0),
             closed: Mutex::new(false),
@@ -692,6 +736,19 @@ impl PtyService {
         let session = self.session(session_id)?;
         let process_id = session.recover(&session.child, "child").child.process_id();
         process_id.ok_or_else(|| "PTY child has no process id".to_string())
+    }
+
+    /// The surface and the start time of the process `pid` when a session of this service started it for a surface and has
+    /// not reaped it (core docs/spec/sidecars.md#process-identity). While a session's reaped is None, the pid of its child
+    /// refers to that child, so an answer names no process that has been reaped and its pid reused.
+    pub fn process_surface(&self, pid: u32) -> Option<SurfaceProcess> {
+        let sessions: Vec<Arc<Session>> = self.sessions().values().cloned().collect();
+        sessions.into_iter().find_map(|session| {
+            let process = session.surface_process.as_ref()?;
+            let child = session.recover(&session.child, "child");
+            (child.reaped.is_none() && child.child.process_id() == Some(pid))
+                .then(|| process.clone())
+        })
     }
 
     fn sessions(&self) -> MutexGuard<'_, HashMap<String, Arc<Session>>> {
