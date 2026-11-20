@@ -1,5 +1,6 @@
 # Changelog
 
+- S211: `alacritty/tests/wheel_routes_test.rs` 가 core `docs/spec/terminal-read.md#wheel-input` 의 wheel route 공유 case 를 실제 engine, service 의 wheel route, 실제 PTY, 실제 program 으로 실행한다. 바뀌지 않은 sidecar 에서 두 test 가 통과한다.
 - S207: engine 이 답하는 OSC 질의(OSC 5, 17, 19)의 답이 같은 출력에서 그 앞의 질의의 답 뒤에 오고, 그런 OSC 의 다른 이벤트도 그 앞의 출력의 이벤트 뒤에 온다. engine 은 OSC 에 대해 행동하기 전에 OSC 의 끝까지의 출력을 library 에 넘긴다.
 - S210: scroll 읽기의 각 답이 자기 요청에 답하고 그 `cids` 를 담는다. tick 에서의 답과 읽기를 끝내는 오류는 그것을 끝낸 명령의 sink 로 갔다.
 - S205-5: `screen.scroll.read {by, quiet}` 가 wheel 경로로 program 을 scroll 하고, 동기 update 가 마지막 출력을 끝내거나 출력 없이 `quiet` 개의 tick 이 올 때까지 읽기 frame 요청의 tick 으로 기다리고, 읽고, 되돌려 scroll 하여 `restored` 를 담은 `screen.scroll` 로 답해, 전체 화면 program 이 그린 적 없는 글을 읽는다(core `docs/spec/terminal-read.md#program-scroll`). 사람의 입력은 읽기를 `scrollReadInterrupted` 로 끝낸다.
