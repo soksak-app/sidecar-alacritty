@@ -25,6 +25,15 @@ typedef struct {
     CGContextRef context;
     void *context_base;
     size_t context_row;
+    // What the last composition of a strip frame left in the surface (S238): the store epoch that it composed from (0 when
+    // the pixels are unknown), the slot and slot version of each row band, whether it holds the margin, and the rectangles
+    // that it applied over the strips (a retained NSData of ComposeRect).
+    uint64_t epoch;
+    uint32_t band_count;
+    uint32_t *band_slots;
+    uint64_t *band_versions;
+    uint8_t margin_held;
+    void *rects;
 } FrameTarget;
 
 struct Frame {
@@ -54,6 +63,11 @@ struct Frame {
     uint8_t *margin;
     uint32_t margin_top;
     uint8_t margin_filled;
+    // The epoch of the store, which changes whenever the store is made or emptied, and the version of each slot, which
+    // changes whenever a draw fills the slot, so a target knows whether the strip of a band is still the one it holds.
+    uint64_t store_epoch;
+    uint64_t *slot_versions;
+    uint64_t slot_fills;
     uint64_t draws;
     // The overlay of a strip frame: a surface of the frame size into which the CoreGraphics draw composites the inline
     // images over a copy of the strip pixels under them.
@@ -783,6 +797,7 @@ static void strip_store_free(Frame *frame) {
     free(frame->slot_hashes);
     free(frame->slot_filled);
     free(frame->slot_used);
+    free(frame->slot_versions);
     free(frame->row_slots);
     free(frame->margin);
     if (frame->slot_cells) CFRelease(frame->slot_cells);
@@ -790,6 +805,7 @@ static void strip_store_free(Frame *frame) {
     frame->slot_hashes = NULL;
     frame->slot_filled = NULL;
     frame->slot_used = NULL;
+    frame->slot_versions = NULL;
     frame->row_slots = NULL;
     frame->margin = NULL;
     frame->slot_cells = NULL;
@@ -807,6 +823,7 @@ static void strip_store_clear(Frame *frame) {
     }
     frame->margin_filled = 0;
     frame->rows_valid = 0;
+    frame->store_epoch++;
 }
 
 // Sizes an empty store for a configuration: two slots for each screen row that the frame shows, a slot of the cell height,
@@ -814,6 +831,7 @@ static void strip_store_clear(Frame *frame) {
 static int strip_store_reset(Frame *frame, Screen *screen, Metrics *metrics) {
     strip_store_free(frame);
     frame->rows_valid = 0;
+    frame->store_epoch++;
     if (metrics->cell_height == 0) return -1;
     uint64_t rows_height = (uint64_t)screen->height * metrics->cell_height;
     uint32_t shown = (uint32_t)MIN((uint64_t)screen->height,
@@ -828,12 +846,14 @@ static int strip_store_reset(Frame *frame, Screen *screen, Metrics *metrics) {
     frame->slot_hashes = calloc(slots, sizeof(uint64_t));
     frame->slot_filled = calloc(slots, sizeof(uint32_t));
     frame->slot_used = calloc(slots, sizeof(uint64_t));
+    frame->slot_versions = calloc(slots, sizeof(uint64_t));
     frame->row_slots = calloc(MAX(screen->height, 1), sizeof(uint32_t));
     frame->margin = malloc(MAX((size_t)(frame->height - frame->margin_top) * pixel_row, 1));
     NSMutableArray *cells = [NSMutableArray arrayWithCapacity:frame->slot_count];
     for (uint32_t slot = 0; slot < frame->slot_count; slot++) [cells addObject:[NSNull null]];
     frame->slot_cells = (__bridge_retained void *)cells;
-    if (!frame->store || !frame->slot_hashes || !frame->slot_filled || !frame->slot_used || !frame->row_slots ||
+    if (!frame->store || !frame->slot_hashes || !frame->slot_filled || !frame->slot_used || !frame->slot_versions ||
+        !frame->row_slots ||
         !frame->margin) {
         strip_store_free(frame);
         return -1;
@@ -931,23 +951,101 @@ static void serialize_append(NSMutableData *data, const void *bytes, size_t leng
 
 // Copies the strips of the rows and the margin into the target surface and applies the rectangles. Returns -1 when a
 // surface does not lock.
+// Whether two lists of rectangles name the same rectangles field by field; the padding of a ComposeRect is not compared.
+static BOOL compose_rects_equal(NSData *left, NSData *right) {
+    if (!left || left.length != right.length) return NO;
+    const ComposeRect *a = left.bytes, *b = right.bytes;
+    for (NSUInteger i = 0; i < left.length / sizeof(ComposeRect); i++) {
+        if (a[i].left != b[i].left || a[i].top != b[i].top || a[i].right != b[i].right || a[i].bottom != b[i].bottom ||
+            a[i].kind != b[i].kind || memcmp(a[i].bgr, b[i].bgr, 3) != 0) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+// Marks the row bands, and the margin, that the rectangles cover.
+static void compose_mark(const Frame *frame, NSData *rects, uint8_t *bands, uint32_t band_count, uint8_t *margin) {
+    const ComposeRect *items = rects.bytes;
+    for (NSUInteger i = 0; i < rects.length / sizeof(ComposeRect); i++) {
+        if (items[i].top >= items[i].bottom) continue;
+        uint32_t last = (items[i].bottom - 1) / frame->slot_height;
+        for (uint32_t band = items[i].top / frame->slot_height; band <= last && band < band_count; band++) bands[band] = 1;
+        if (items[i].bottom > frame->margin_top) *margin = 1;
+    }
+}
+
+// Copies into the target the strip of each row band whose strip differs from the one that the target holds from its own
+// last composition, every band under the rectangles of that composition and of this one, and the margin when the target
+// does not hold it; then applies the rectangles. Returns -1 when a surface does not lock or memory runs out, and leaves the
+// pixels of the target unknown.
 static int frame_compose(Frame *frame, NSData *rects) {
-    if (IOSurfaceLock(frame->overlay, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) return -1;
+    FrameTarget *target = &frame->targets[frame->current];
+    uint32_t band_count = frame->slot_height ? (frame->margin_top + frame->slot_height - 1) / frame->slot_height : 0;
+    BOOL known = target->epoch == frame->store_epoch && target->band_count == band_count;
+    target->epoch = 0;
+    if (!known) {
+        free(target->band_slots);
+        free(target->band_versions);
+        target->band_slots = calloc(MAX(band_count, 1), sizeof(uint32_t));
+        target->band_versions = calloc(MAX(band_count, 1), sizeof(uint64_t));
+        target->band_count = band_count;
+    }
+    uint8_t *needed = calloc(MAX(band_count, 1), 1);
+    if (!target->band_slots || !target->band_versions || !needed) {
+        free(needed);
+        return -1;
+    }
+    uint8_t margin = !known || !target->margin_held;
+    for (uint32_t band = 0; band < band_count; band++) {
+        uint32_t slot = frame->row_slots[band];
+        needed[band] = !known || target->band_slots[band] != slot || target->band_versions[band] != frame->slot_versions[slot];
+    }
+    // A band under the same fills as in the last composition of the target already holds them, so equal rectangles
+    // without inline images mark no band; an inline image may change its pixels at the same place.
+    NSData *previous = known ? (__bridge NSData *)target->rects : nil;
+    BOOL images = NO;
+    for (NSUInteger i = 0; i < rects.length / sizeof(ComposeRect); i++) {
+        images = images || ((const ComposeRect *)rects.bytes)[i].kind == COMPOSE_OVERLAY;
+    }
+    if (images || !compose_rects_equal(previous, rects)) {
+        if (previous) compose_mark(frame, previous, needed, band_count, &margin);
+        compose_mark(frame, rects, needed, band_count, &margin);
+    }
+
+    if (IOSurfaceLock(frame->overlay, kIOSurfaceLockReadOnly, NULL) != kIOReturnSuccess) {
+        free(needed);
+        return -1;
+    }
     if (IOSurfaceLock(frame->surface, 0, NULL) != kIOReturnSuccess) {
         IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
+        free(needed);
         return -1;
     }
     const uint8_t *overlay_base = IOSurfaceGetBaseAddress(frame->overlay);
     uint8_t *target_base = IOSurfaceGetBaseAddress(frame->surface);
     size_t overlay_row = IOSurfaceGetBytesPerRow(frame->overlay);
     size_t target_row = IOSurfaceGetBytesPerRow(frame->surface);
-    for (uint32_t y = 0; y < frame->height; y++) {
+    uint32_t composed = 0;
+    for (uint32_t band = 0; band < band_count; band++) {
+        if (!needed[band]) continue;
+        composed++;
+        uint32_t bottom = MIN((band + 1) * frame->slot_height, frame->margin_top);
+        for (uint32_t y = band * frame->slot_height; y < bottom; y++) {
+            memcpy(target_base + y * target_row, strip_row_pixels(frame, y), (size_t)frame->width * 4);
+        }
+    }
+    for (uint32_t y = frame->margin_top; margin && y < frame->height; y++) {
         memcpy(target_base + y * target_row, strip_row_pixels(frame, y), (size_t)frame->width * 4);
     }
+    frame->steps.composed = composed;
+    // A rectangle is applied over the pixel rows that this composition copied; a row that it did not copy holds the same
+    // rectangles from the last composition, and a difference fill applied twice would undo itself.
     const ComposeRect *items = rects.bytes;
     for (NSUInteger i = 0; i < rects.length / sizeof(ComposeRect); i++) {
         const ComposeRect *rect = &items[i];
         for (uint32_t y = rect->top; y < rect->bottom; y++) {
+            if (y < frame->margin_top ? !needed[y / frame->slot_height] : !margin) continue;
             uint8_t *row = target_base + y * target_row;
             if (rect->kind == COMPOSE_OVERLAY) {
                 memcpy(row + rect->left * 4, overlay_base + y * overlay_row + rect->left * 4, (rect->right - rect->left) * 4);
@@ -964,6 +1062,15 @@ static int frame_compose(Frame *frame, NSData *rects) {
     }
     IOSurfaceUnlock(frame->surface, 0, NULL);
     IOSurfaceUnlock(frame->overlay, kIOSurfaceLockReadOnly, NULL);
+    free(needed);
+    for (uint32_t band = 0; band < band_count; band++) {
+        target->band_slots[band] = frame->row_slots[band];
+        target->band_versions[band] = frame->slot_versions[frame->row_slots[band]];
+    }
+    target->margin_held = 1;
+    if (target->rects) CFRelease(target->rects);
+    target->rects = (__bridge_retained void *)[rects copy];
+    target->epoch = frame->store_epoch;
     return 0;
 }
 
@@ -1085,6 +1192,7 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         }
         frame->slot_filled[slot] = shown;
         frame->slot_used[slot] = frame->draws;
+        frame->slot_versions[slot] = ++frame->slot_fills;
         rows[row] = 1;
         count++;
     }
@@ -1230,6 +1338,9 @@ void frame_drop(Frame *frame) {
         for (uint32_t i = 0; i < frame->target_count; i++) {
             if (frame->targets[i].context) CGContextRelease(frame->targets[i].context);
             if (frame->targets[i].surface) CFRelease(frame->targets[i].surface);
+            free(frame->targets[i].band_slots);
+            free(frame->targets[i].band_versions);
+            if (frame->targets[i].rects) CFRelease(frame->targets[i].rects);
         }
         if (frame->color_space) CGColorSpaceRelease(frame->color_space);
         if (frame->font) CFRelease(frame->font);

@@ -653,3 +653,71 @@ fn a_draw_serializes_only_the_changed_rows() {
         .expect("coregraphics draw");
     assert_same_pixels(&coregraphics, &strip, width, height, "the kept rows");
 }
+
+// The composition copies into a target only the rows whose strips differ from those that the target holds from its own last
+// draw, and the rows under the cursor of that draw and of this one (S238); each draw has the pixels of a CoreGraphics frame,
+// also when a held surface moves a draw to another target whose last draw is older.
+#[test]
+fn a_target_composes_only_the_rows_that_differ_from_its_last_draw() {
+    let metrics = metrics(13.0, 1.0);
+    let (width, height) = (
+        metrics.cell_width as u32 * 6,
+        metrics.cell_height as u32 * 3,
+    );
+    let strip = Frame::new_strip(width, height).expect("strip frame");
+    let theme = TerminalTheme::dark();
+    let cursor = cursor_render(CursorShape::Block);
+    let mut screen = text_screen();
+    screen.cursor.row = 0;
+    let draw = |screen: &Screen, what: &str| {
+        strip
+            .draw_with_theme(screen, &metrics, cursor, &theme)
+            .expect(what);
+        let coregraphics = Frame::new(width, height).expect("reference frame");
+        coregraphics
+            .draw_with_theme(screen, &metrics, cursor, &theme)
+            .expect("reference draw");
+        assert_same_pixels(&coregraphics, &strip, width, height, what);
+        strip.steps().composed
+    };
+    assert_eq!(
+        draw(&screen, "first draw"),
+        3,
+        "the first draw composes every row"
+    );
+    let first = strip.id();
+    screen.lines[2][1].ch = Some("#".into());
+    assert_eq!(
+        draw(&screen, "changed row"),
+        1,
+        "the same target composes the one changed row"
+    );
+    strip.hold(first).expect("hold");
+    screen.lines[1][4].ch = Some("%".into());
+    assert_eq!(
+        draw(&screen, "new target"),
+        3,
+        "a new target composes every row"
+    );
+    let second = strip.id();
+    assert_ne!(second, first, "a held surface is not drawn into");
+    strip.hold(second).expect("hold the second");
+    strip.release(first).expect("release");
+    screen.lines[2][3].ch = Some("&".into());
+    assert_eq!(
+        draw(&screen, "older target"),
+        2,
+        "a target composes the rows that changed since its own last draw"
+    );
+    assert_eq!(
+        strip.id(),
+        first,
+        "the released surface is drawn into again"
+    );
+    screen.cursor.row = 2;
+    assert_eq!(
+        draw(&screen, "moved cursor"),
+        2,
+        "a moved cursor composes the rows of its old and its new place"
+    );
+}

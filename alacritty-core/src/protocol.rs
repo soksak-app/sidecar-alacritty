@@ -2309,6 +2309,7 @@ fn record_frame(
         fields["targets"] = json!(draw.steps.targets);
         fields["targets_held"] = json!(draw.steps.targets_held);
         fields["targets_in_use"] = json!(draw.steps.targets_in_use);
+        fields["rows_composed"] = json!(draw.steps.composed);
         fields["raster"] = json!(draw.raster);
         fields["image"] = json!(draw.image);
     }

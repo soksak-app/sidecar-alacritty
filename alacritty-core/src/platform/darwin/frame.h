@@ -141,6 +141,8 @@ typedef struct {
     uint32_t targets;
     uint32_t targets_held;
     uint32_t targets_in_use;
+    // The count of rows whose strips the composition copied into the target.
+    uint32_t composed;
 } FrameSteps;
 void frame_steps(Frame *frame, FrameSteps *out);
 #ifdef SOKSAK_DIAGNOSTICS
