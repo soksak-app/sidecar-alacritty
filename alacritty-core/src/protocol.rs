@@ -45,6 +45,9 @@ enum RequestStage {
     ActorQueue,
     /// The surface actor handles the request.
     Actor,
+    /// The surface actor holds the request until the event that ends its operation, which has no time limit: a
+    /// `messages.wait` waits for a message or for the close of its registration (core docs/spec/messaging.md#mcp-tools).
+    Event,
     /// A reply of the request waits for room in the output queue of the connection.
     OutputQueue,
     /// The request was answered.
@@ -52,11 +55,12 @@ enum RequestStage {
 }
 
 impl RequestStage {
-    const ALL: [RequestStage; 6] = [
+    const ALL: [RequestStage; 7] = [
         RequestStage::InputLoop,
         RequestStage::SurfaceQueue,
         RequestStage::ActorQueue,
         RequestStage::Actor,
+        RequestStage::Event,
         RequestStage::OutputQueue,
         RequestStage::Answered,
     ];
@@ -67,6 +71,7 @@ impl RequestStage {
             RequestStage::SurfaceQueue => "surface queue",
             RequestStage::ActorQueue => "actor queue",
             RequestStage::Actor => "actor",
+            RequestStage::Event => "event",
             RequestStage::OutputQueue => "output queue",
             RequestStage::Answered => "answered",
         }
@@ -262,7 +267,9 @@ async fn watch_requests(
                     continue;
                 };
                 let stage = request.stage();
-                if stage == RequestStage::Answered {
+                // A request that waits for its event is not in progress: its operation has no time limit, and its end
+                // is that event.
+                if stage == RequestStage::Answered || stage == RequestStage::Event {
                     continue;
                 }
                 request.log.emit_for(
@@ -448,6 +455,14 @@ impl OutputSink {
         OutputSink {
             request: Some(request),
             ..self.clone()
+        }
+    }
+
+    /// Puts the request of this sink in the stage `Event`: the surface actor holds it until the event that ends its
+    /// operation, and the watch of the requests in progress does not record it.
+    fn wait_for_event(&self) {
+        if let Some(request) = &self.request {
+            request.enter(RequestStage::Event);
         }
     }
 
@@ -4609,6 +4624,7 @@ async fn surface_task(
                             continue;
                         };
                         if wait {
+                            output_tx.wait_for_event();
                             message_waits.push(MessageWait { after, registration, output: output_tx.clone() });
                             if !answer_message_waits(&surface_id, &mut message_waits, current).await { return; }
                         } else {
