@@ -239,6 +239,15 @@ impl Session {
     }
 }
 
+/// The owner of a session shell: the configuration directory `owner` and the surface `surface`.
+/// An empty surface starts the shell without `SOKSAK_SURFACE`, and an empty owner keeps the value of the
+/// environment of the process (a service on standard input and output).
+#[derive(Clone, Copy, Debug)]
+pub struct ShellOwner<'a> {
+    pub owner: &'a str,
+    pub surface: &'a str,
+}
+
 #[derive(Clone)]
 pub struct PtyService {
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
@@ -248,6 +257,20 @@ pub struct PtyService {
     /// The bytes of queued input that each session of the service holds at most.
     input_bound: usize,
     log: Events,
+}
+
+/// Sets the variables that name the configuration directory and the surface of a process (core
+/// docs/spec/sidecars.md#processes-of-a-surface). The process replaces the values that its environment holds; a process
+/// without a surface has no `SOKSAK_SURFACE`.
+fn apply_surface_environment(command: &mut CommandBuilder, owner: ShellOwner<'_>) {
+    if !owner.owner.is_empty() {
+        command.env("SOKSAK_CONFIG_DIR", owner.owner);
+    }
+    if owner.surface.is_empty() {
+        command.env_remove("SOKSAK_SURFACE");
+    } else {
+        command.env("SOKSAK_SURFACE", owner.surface);
+    }
 }
 
 /// Applies the terminal locale rules to the child environment (core docs/spec/terminal-runtime.md).
@@ -325,7 +348,7 @@ impl PtyService {
     /// followed by the shell name, and SHELL is the shell path).
     pub fn open_shell(
         &self,
-        owner: &str,
+        owner: ShellOwner<'_>,
         shell: &str,
         cwd: Option<&str>,
         cols: u16,
@@ -334,9 +357,10 @@ impl PtyService {
     ) -> Result<String, String> {
         let mut command = CommandBuilder::new_default_prog();
         self.apply_environment(&mut command);
+        apply_surface_environment(&mut command, owner);
         command.env("SHELL", shell);
         crate::shell_integration::apply(shell, &mut command, &self.log)?;
-        self.spawn_owned(owner, command, cwd, cols, rows, events)
+        self.spawn_owned(owner.owner, command, cwd, cols, rows, events)
     }
 
     fn spawn_owned(

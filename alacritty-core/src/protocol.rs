@@ -1345,6 +1345,9 @@ pub struct ShellRequest {
     /// The absolute path of the directory the shell starts in. Without it, the home directory of
     /// the account is used.
     pub directory: Option<String>,
+    /// The surface whose request opens the session. The process of the session names it in
+    /// `SOKSAK_SURFACE`; an empty value means that no surface owns the process.
+    pub surface: String,
 }
 
 #[async_trait]
@@ -2794,6 +2797,30 @@ async fn request_frame(surface_id: &str, state: &mut ImageState, output_tx: &Out
         "name": state.name, "generation": state.generation,
     }}}});
     output_tx.send(request.to_string()).await.is_ok()
+}
+
+/// Marks the screen changed after a `scroll` on the viewport route or a `viewport` request moved the viewport from `before`,
+/// so the moves between two display frames are drawn together at the tick of one frame request, and leaves the surface as it
+/// is when the viewport did not move: a wheel at the end of the retained history or at the newest output changes nothing on
+/// the screen (docs/spec/alacritty-core.md#frame-requests). Returns false when the output channel has closed.
+async fn moved_viewport(
+    surface_id: &str,
+    engine: &mut Box<dyn Engine>,
+    image_state: &mut Option<ImageState>,
+    before: u32,
+    output_tx: &OutputSink,
+) -> bool {
+    if engine.viewport_offset() == before {
+        return true;
+    }
+    refresh_inline_image_positions(engine, image_state);
+    if hold_while_presenting(image_state) {
+        return true;
+    }
+    match image_state.as_mut() {
+        Some(state) => request_frame(surface_id, state, output_tx).await,
+        None => true,
+    }
 }
 
 fn hold_while_presenting(image_state: &mut Option<ImageState>) -> bool {
@@ -5341,15 +5368,12 @@ async fn surface_task(
                             if read.reply.reply(response).await.is_err() { return; }
                         }
                         // Limits the viewport to the range of history that the engine retains.
-                        let delta = i64::from(offset) - i64::from(engine.viewport_offset());
+                        let before = engine.viewport_offset();
+                        let delta = i64::from(offset) - i64::from(before);
                         if delta != 0 {
                             inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32);
                         }
-                        refresh_inline_image_positions(&mut engine, &mut image_state);
-                        if hold_while_presenting(&mut image_state) { continue; }
-                        let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                        if let Some(state) = image_state.as_mut()
-                            && !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
+                        if !moved_viewport(&surface_id, &mut engine, &mut image_state, before, &output_tx).await { return; }
                     }
                     SurfaceCommand::Scroll { lines, col, row, shift, cids } => {
                         if let Some(read) = scroll_read.take() {
@@ -5374,12 +5398,9 @@ async fn surface_task(
                                     && !inputs.write(&session_port, sid, &bytes, &cids, AfterWrite::Scroll(output_tx.clone(), json!(surface_id))).await { return; }
                             }
                             None => {
+                                let before = engine.viewport_offset();
                                 inputs.scroll_viewport(engine.as_mut(), session_id.as_deref(), lines);
-                                refresh_inline_image_positions(&mut engine, &mut image_state);
-                                if hold_while_presenting(&mut image_state) { continue; }
-                                let screen = decorate_screen(engine.screen(), focused, &preedit, &cursor_policy, 0);
-                                if let Some(state) = image_state.as_mut()
-                                    && !present_screen(&surface_id, screen, state, &output_tx, "scroll", &log, inputs.sequence).await { return; }
+                                if !moved_viewport(&surface_id, &mut engine, &mut image_state, before, &output_tx).await { return; }
                             }
                         }
                     }
@@ -6660,6 +6681,7 @@ where
                                 let request = ShellRequest {
                                     shell: shell.to_string(),
                                     directory,
+                                    surface: surface_id.clone(),
                                 };
                                 if tx
                                     .send(SurfaceCommand::Open { image, request })
@@ -7710,9 +7732,20 @@ impl SessionPort for LocalSessionPort {
             .as_deref()
             .map(crate::pty::resolve_directory)
             .transpose()?;
+        let surface = request.surface.clone();
         let events = self.events_tx.clone();
         tokio::task::spawn_blocking(move || {
-            service.open_shell(&owner, &shell, directory.as_deref(), cols, rows, events)
+            service.open_shell(
+                crate::pty::ShellOwner {
+                    owner: &owner,
+                    surface: &surface,
+                },
+                &shell,
+                directory.as_deref(),
+                cols,
+                rows,
+                events,
+            )
         })
         .await
         .map_err(|error| format!("open PTY task failed: {error}"))?
