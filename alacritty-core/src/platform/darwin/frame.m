@@ -20,6 +20,11 @@ typedef struct {
     uint32_t id;
     uint8_t nonce[16];
     uint8_t held;
+    // The bitmap context of the CoreGraphics draws into the surface, made for the base address and the row bytes that the
+    // surface had when the context was made, or NULL before the first draw into the surface.
+    CGContextRef context;
+    void *context_base;
+    size_t context_row;
 } FrameTarget;
 
 struct Frame {
@@ -58,6 +63,19 @@ struct Frame {
     uint32_t strips_drawn;
     // The step times of the last draw.
     FrameSteps steps;
+    // The count of the objects that the CoreGraphics draws of the frame created: bitmap contexts, fonts, color spaces and
+    // default colors.
+    uint32_t paint_creations;
+    // The objects that every CoreGraphics draw of the frame uses, made at the first draw and again when what they are made
+    // from changes (S239): the sRGB color space, the font of the descriptor and size of the metrics, and the default
+    // foreground and background colors of the screen.
+    CGColorSpaceRef color_space;
+    CTFontRef font;
+    CTFontDescriptorRef font_descriptor;
+    double font_size;
+    CGColorRef default_fg;
+    CGColorRef default_bg;
+    uint8_t default_rgb[6];
     FrameTarget *targets;
     uint32_t target_count;
     uint32_t current;
@@ -317,6 +335,87 @@ int frame_draw(Frame *frame, Screen *screen, Metrics *metrics) {
 // the whole frame: the background, every cell, the inline images and the cursor. With a selection (one flag per screen row)
 // it draws only the selected rows, each from a fill of its row box with the default background, as the strips of a strip
 // frame; the frame then draws the images and the cursor itself.
+// The target of the frame that holds the surface, or NULL.
+static FrameTarget *frame_target_of(Frame *frame, IOSurfaceRef surface) {
+    for (uint32_t i = 0; i < frame->target_count; i++) {
+        if (frame->targets[i].surface == surface) return &frame->targets[i];
+    }
+    return NULL;
+}
+
+// Returns the bitmap context of the target that holds the surface, made again when the base address or the row bytes of the
+// locked surface differ from those that the context was made for. Returns NULL when it cannot be made.
+static CGContextRef frame_paint_context(Frame *frame, IOSurfaceRef surface, void *base, size_t bytes_per_row) {
+    FrameTarget *target = frame_target_of(frame, surface);
+    if (!target) return NULL;
+    if (target->context && target->context_base == base && target->context_row == bytes_per_row) return target->context;
+    if (target->context) CGContextRelease(target->context);
+    target->context = NULL;
+    if (!frame->color_space) {
+        frame->color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if (!frame->color_space) return NULL;
+        frame->paint_creations++;
+    }
+    // sRGB 를 사용하는 BGRA8 bitmap context 를 만든다
+    target->context = CGBitmapContextCreateWithData(base, frame->width, frame->height, 8, bytes_per_row, frame->color_space,
+        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, NULL, NULL);
+    if (!target->context) return NULL;
+    frame->paint_creations++;
+    target->context_base = base;
+    target->context_row = bytes_per_row;
+    return target->context;
+}
+
+// Returns the font of the descriptor and the size of the metrics, made again when either changes, or NULL.
+static CTFontRef frame_paint_font(Frame *frame, Metrics *metrics) {
+    if (!metrics->font) return NULL;
+    CTFontDescriptorRef descriptor = metrics->font->descriptor;
+    if (frame->font && frame->font_descriptor == descriptor && frame->font_size == metrics->font_size) return frame->font;
+    if (frame->font) CFRelease(frame->font);
+    if (frame->font_descriptor) CFRelease(frame->font_descriptor);
+    frame->font = NULL;
+    frame->font_descriptor = NULL;
+    // frame_metrics 에서 사용하는 것과 같은 크기로 글꼴을 설정한다
+    frame->font = CTFontCreateWithFontDescriptor(descriptor, metrics->font_size, NULL);
+    if (!frame->font) return NULL;
+    frame->paint_creations++;
+    // The descriptor is retained, so a later descriptor at the same address is the same descriptor.
+    frame->font_descriptor = (CTFontDescriptorRef)CFRetain(descriptor);
+    frame->font_size = metrics->font_size;
+    return frame->font;
+}
+
+// Makes the default colors of the screen when they differ from the kept ones. Returns -1 when a color cannot be made.
+static int frame_paint_defaults(Frame *frame, Screen *screen) {
+    uint8_t rgb[6];
+    memcpy(rgb, screen->default_foreground, 3);
+    memcpy(rgb + 3, screen->default_background, 3);
+    if (frame->default_fg && frame->default_bg && memcmp(rgb, frame->default_rgb, 6) == 0) return 0;
+    if (frame->default_fg) CGColorRelease(frame->default_fg);
+    if (frame->default_bg) CGColorRelease(frame->default_bg);
+    // 기본 색상은 Rust 엔진과 동일한 팔레트를 호출 단위로 전달받는다.
+    frame->default_fg = CGColorCreateSRGB(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 1.0);
+    frame->default_bg = CGColorCreateSRGB(rgb[3] / 255.0, rgb[4] / 255.0, rgb[5] / 255.0, 1.0);
+    if (!frame->default_fg || !frame->default_bg) {
+        if (frame->default_fg) CGColorRelease(frame->default_fg);
+        if (frame->default_bg) CGColorRelease(frame->default_bg);
+        frame->default_fg = frame->default_bg = NULL;
+        return -1;
+    }
+    frame->paint_creations += 2;
+    memcpy(frame->default_rgb, rgb, 6);
+    return 0;
+}
+
+// Drops the context of the target of a draw that stopped with its graphics state saved, so the next draw makes a context
+// whose state is the initial one.
+static void frame_paint_abort(Frame *frame, IOSurfaceRef surface) {
+    FrameTarget *target = frame_target_of(frame, surface);
+    if (!target || !target->context) return;
+    CGContextRelease(target->context);
+    target->context = NULL;
+}
+
 static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Metrics *metrics,
                          InlineImageRaster *images, uint32_t image_count,
                          RenderOutput *render_output, const uint8_t *rows) {
@@ -344,50 +443,17 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
     }
 #endif
 
-    // sRGB 색 공간을 만든다
-    CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    if (!color_space) {
+    // The context of the target, the font and the default colors are made once and kept while what they are made from
+    // stays (S239). The draw leaves the graphics state of the context as it found it.
+    CGContextRef ctx = frame_paint_context(frame, surface, base_address, bytes_per_row);
+    CTFontRef font = ctx ? frame_paint_font(frame, metrics) : NULL;
+    if (!font || frame_paint_defaults(frame, screen) != 0) {
         IOSurfaceUnlock(surface, 0, NULL);
         return -1;
     }
-
-    // sRGB 를 사용하는 BGRA8 bitmap context 를 만든다
-    CGContextRef ctx = CGBitmapContextCreateWithData(
-        base_address,
-        frame->width, frame->height,
-        8,  // 성분당 비트 수
-        bytes_per_row,
-        color_space,
-        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
-        NULL,  // release 콜백
-        NULL   // release 콜백 정보
-    );
-    CGColorSpaceRelease(color_space);
-
-    if (!ctx) {
-        IOSurfaceUnlock(surface, 0, NULL);
-        return -1;
-    }
-
-    // frame_metrics 에서 사용하는 것과 같은 크기로 글꼴을 설정한다
-    CTFontRef font = metrics->font ? CTFontCreateWithFontDescriptor(metrics->font->descriptor, metrics->font_size, NULL) : NULL;
-    if (!font) {
-        CGContextRelease(ctx);
-        IOSurfaceUnlock(surface, 0, NULL);
-        return -1;
-    }
-
-    // 기본 색상은 Rust 엔진과 동일한 팔레트를 호출 단위로 전달받는다.
-    CGColorRef default_fg_color = CGColorCreateSRGB(
-        screen->default_foreground[0] / 255.0,
-        screen->default_foreground[1] / 255.0,
-        screen->default_foreground[2] / 255.0,
-        1.0);
-    CGColorRef default_bg_color = CGColorCreateSRGB(
-        screen->default_background[0] / 255.0,
-        screen->default_background[1] / 255.0,
-        screen->default_background[2] / 255.0,
-        1.0);
+    CGColorRef default_fg_color = frame->default_fg;
+    CGColorRef default_bg_color = frame->default_bg;
+    CGContextSaveGState(ctx);
 
     // CGContextFillRect 로 배경 전체를 채운다
     CGContextSetFillColorWithColor(ctx, default_bg_color);
@@ -511,10 +577,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
             if (!cell->ch) {
                 if (fg_cache.color) CGColorRelease(fg_cache.color);
                 if (bg_cache.color) CGColorRelease(bg_cache.color);
-                CFRelease(font);
-                CGContextRelease(ctx);
-                CGColorRelease(default_fg_color);
-                CGColorRelease(default_bg_color);
+                frame_paint_abort(frame, surface);
                 IOSurfaceUnlock(surface, 0, NULL);
                 return -1;
             }
@@ -522,10 +585,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
             if (!ch) {
                 if (fg_cache.color) CGColorRelease(fg_cache.color);
                 if (bg_cache.color) CGColorRelease(bg_cache.color);
-                CFRelease(font);
-                CGContextRelease(ctx);
-                CGColorRelease(default_fg_color);
-                CGColorRelease(default_bg_color);
+                frame_paint_abort(frame, surface);
                 IOSurfaceUnlock(surface, 0, NULL);
                 return -1;
             }
@@ -603,10 +663,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
         CGFloat height = 0;
         CGImageRef image = inline_image_decode(raster, &width, &height);
         if (!image) {
-            CFRelease(font);
-            CGContextRelease(ctx);
-            CGColorRelease(default_fg_color);
-            CGColorRelease(default_bg_color);
+            frame_paint_abort(frame, surface);
             IOSurfaceUnlock(surface, 0, NULL);
             return -1;
         }
@@ -683,10 +740,7 @@ static int frame_draw_cg(Frame *frame, IOSurfaceRef surface, Screen *screen, Met
     }
 #endif
 
-    CFRelease(font);
-    CGContextRelease(ctx);
-    CGColorRelease(default_fg_color);
-    CGColorRelease(default_bg_color);
+    CGContextRestoreGState(ctx);
 
     IOSurfaceUnlock(surface, 0, NULL);
 
@@ -1068,6 +1122,10 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
 uint32_t frame_strips_drawn(Frame *frame) {
     return frame->strips_drawn;
 }
+
+uint32_t frame_paint_creations(Frame *frame) {
+    return frame->paint_creations;
+}
 #endif
 
 // Selects the target of the next draw: the current one when it is neither held nor in use, otherwise another such target,
@@ -1142,8 +1200,14 @@ void frame_steps(Frame *frame, FrameSteps *out) {
 void frame_drop(Frame *frame) {
     if (frame) {
         for (uint32_t i = 0; i < frame->target_count; i++) {
+            if (frame->targets[i].context) CGContextRelease(frame->targets[i].context);
             if (frame->targets[i].surface) CFRelease(frame->targets[i].surface);
         }
+        if (frame->color_space) CGColorSpaceRelease(frame->color_space);
+        if (frame->font) CFRelease(frame->font);
+        if (frame->font_descriptor) CFRelease(frame->font_descriptor);
+        if (frame->default_fg) CGColorRelease(frame->default_fg);
+        if (frame->default_bg) CGColorRelease(frame->default_bg);
         free(frame->targets);
         strip_store_free(frame);
         if (frame->overlay) CFRelease(frame->overlay);

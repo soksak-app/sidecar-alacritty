@@ -271,6 +271,8 @@ unsafe extern "C" {
     fn frame_release(frame: *mut CFrame, id: u32) -> i32;
     #[cfg(feature = "diagnostics")]
     fn frame_strips_drawn(frame: *mut CFrame) -> u32;
+    #[cfg(feature = "diagnostics")]
+    fn frame_paint_creations(frame: *mut CFrame) -> u32;
     fn frame_steps(frame: *mut CFrame, out: *mut FrameSteps);
     fn frame_id(frame: *mut CFrame) -> u32;
     fn frame_nonce(frame: *mut CFrame, buf: *mut u8);
@@ -515,6 +517,13 @@ impl Frame {
     #[cfg(feature = "diagnostics")]
     pub fn strips_drawn(&self) -> u32 {
         unsafe { frame_strips_drawn(self.ptr) }
+    }
+
+    /// The count of the objects that the CoreGraphics draws of the frame created: bitmap contexts, fonts, color spaces and
+    /// default colors.
+    #[cfg(feature = "diagnostics")]
+    pub fn paint_creations(&self) -> u32 {
+        unsafe { frame_paint_creations(self.ptr) }
     }
 
     /// Marks the target surface `id` as held by the host, so no draw writes it until it is released.

@@ -572,3 +572,39 @@ fn a_scrolled_strip_frame_has_the_pixels_of_the_coregraphics_frame() {
         }
     }
 }
+
+// The draws of a frame create the color space, the font and the default colors once while the font and the colors stay,
+// and a bitmap context once for each target of the pool (S239): a draw that changes rows creates nothing more.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn the_draws_of_a_frame_create_the_paint_objects_once() {
+    let metrics = metrics(13.0, 1.0);
+    let frame = Frame::new_strip(
+        metrics.cell_width as u32 * 6,
+        metrics.cell_height as u32 * 3,
+    )
+    .expect("strip frame");
+    let theme = TerminalTheme::dark();
+    let mut screen = text_screen();
+    let cursor = cursor_render(CursorShape::Block);
+    frame
+        .draw_with_theme(&screen, &metrics, cursor, &theme)
+        .expect("first draw");
+    let first = frame.paint_creations();
+    assert_eq!(
+        first, 5,
+        "the first draw creates a context, a font, a color space and two colors"
+    );
+    for (index, ch) in ["#", "%", "&"].into_iter().enumerate() {
+        screen.lines[index % 3][3].ch = Some(ch.into());
+        frame
+            .draw_with_theme(&screen, &metrics, cursor, &theme)
+            .expect("changed draw");
+        assert!(frame.strips_drawn() > 0, "draw {index} draws a changed row");
+    }
+    assert_eq!(
+        frame.paint_creations(),
+        first,
+        "a later draw with the same font and colors on the same target creates nothing"
+    );
+}

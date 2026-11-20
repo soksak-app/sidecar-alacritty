@@ -134,6 +134,9 @@ void frame_steps(Frame *frame, FrameSteps *out);
 #ifdef SOKSAK_DIAGNOSTICS
 // The count of strips that the last draw of a strip frame drew.
 uint32_t frame_strips_drawn(Frame *frame);
+// The count of the objects that the CoreGraphics draws of the frame created: bitmap contexts, fonts, color spaces and default
+// colors.
+uint32_t frame_paint_creations(Frame *frame);
 #endif
 
 // IOSurface ID (u32) 를 가져온다
