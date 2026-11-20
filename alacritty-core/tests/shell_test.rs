@@ -9,8 +9,16 @@ use std::os::fd::AsRawFd;
 use std::sync::{Mutex, OnceLock};
 
 use soksak_sidecar_alacritty_core::DaemonEvent;
-use soksak_sidecar_alacritty_core::pty::{PtyService, resolve_directory, resolve_shell};
+use soksak_sidecar_alacritty_core::pty::{
+    PtyService, ShellOwner, resolve_directory, resolve_shell,
+};
 use tokio::time::{Duration, timeout};
+
+/// The owner of a shell of a service on standard input and output, which no surface owns.
+const NO_OWNER: ShellOwner<'static> = ShellOwner {
+    owner: "",
+    surface: "",
+};
 
 // Runs one at a time with the other PTY checks of the same workspace.
 fn native_pty_test_lock() -> std::fs::File {
@@ -61,7 +69,7 @@ async fn a_session_shell_starts_as_a_login_shell() {
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
     let session = service
-        .open_shell("", "/bin/sh", None, 80, 24, tx)
+        .open_shell(NO_OWNER, "/bin/sh", None, 80, 24, tx)
         .expect("open a login shell session");
     service
         .write(
@@ -154,7 +162,7 @@ async fn a_zsh_session_reads_the_user_startup_files_and_reports_prompt_and_comma
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", "/bin/zsh", None, 80, 24, tx);
+    let opened = service.open_shell(NO_OWNER, "/bin/zsh", None, 80, 24, tx);
     let session = opened.expect("open a zsh session");
     let mut output = String::new();
     let prompted =
@@ -220,7 +228,7 @@ async fn a_bash_session_stays_a_login_shell_keeps_the_user_prompt_command_and_re
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(NO_OWNER, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     let mut output = String::new();
     let prompted = collect_until(&mut rx, &mut output, |text| {
@@ -337,7 +345,7 @@ async fn a_bash_debug_trap_from_the_startup_files_is_kept_and_no_marks_are_repor
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(NO_OWNER, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     service
         .write(
@@ -373,7 +381,7 @@ async fn a_resize_during_bash_startup_does_not_report_a_command_at_the_first_pro
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", "/bin/bash", None, 80, 24, tx);
+    let opened = service.open_shell(NO_OWNER, "/bin/bash", None, 80, 24, tx);
     let session = opened.expect("open a bash session");
     // The app sends the surface size right after it opens the session. SIGWINCH arrives while the
     // shell reads its startup files.
@@ -407,7 +415,7 @@ fn open_marked_shell(
         )]);
     let (tx, rx) = soksak_sidecar_alacritty_core::pty::output_channel();
     let session = service
-        .open_shell("", shell, None, 80, 24, tx)
+        .open_shell(NO_OWNER, shell, None, 80, 24, tx)
         .expect("open a shell session");
     (service, session, rx)
 }
@@ -562,7 +570,14 @@ async fn a_session_starts_in_the_requested_directory() {
     let service = PtyService::new(events_test::TestEvents::new().handle());
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
     let session = service
-        .open_shell("", "/bin/sh", Some(directory.to_str().unwrap()), 80, 24, tx)
+        .open_shell(
+            NO_OWNER,
+            "/bin/sh",
+            Some(directory.to_str().unwrap()),
+            80,
+            24,
+            tx,
+        )
         .expect("open a shell session");
     service
         .write(
@@ -610,7 +625,7 @@ async fn reports_its_directory(shell: &str, variable: &str, files: &[(&str, &str
             Some(home.clone().into_os_string()),
         )]);
     let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
-    let opened = service.open_shell("", shell, Some(start.to_str().unwrap()), 80, 24, tx);
+    let opened = service.open_shell(NO_OWNER, shell, Some(start.to_str().unwrap()), 80, 24, tx);
     let session = opened.expect("open a shell session");
     let expected = directory_uri(&start);
     let mut output = String::new();
@@ -644,4 +659,72 @@ async fn zsh_reports_its_working_directory_before_each_prompt() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bash_reports_its_working_directory_before_each_prompt() {
     reports_its_directory("/bin/bash", "HOME", &[(".bash_profile", "PS1='T> '\n")]).await;
+}
+
+/// The service whose environment holds a surface and a configuration directory that its children would inherit.
+fn service_with_inherited_variables() -> PtyService {
+    PtyService::new(events_test::TestEvents::new().handle()).with_environment(vec![
+        (
+            "SOKSAK_SURFACE".to_string(),
+            Some(std::ffi::OsString::from("inherited-surface")),
+        ),
+        (
+            "SOKSAK_CONFIG_DIR".to_string(),
+            Some(std::ffi::OsString::from("/inherited/config")),
+        ),
+    ])
+}
+
+/// Opens a session shell of `owner` on `service`, prints its surface and configuration directory as
+/// `ENV=<surface>|<config>` and returns whether the output holds `expected`, with the output.
+async fn shell_variables(
+    service: &PtyService,
+    owner: ShellOwner<'_>,
+    expected: &str,
+) -> (bool, String) {
+    let (tx, mut rx) = soksak_sidecar_alacritty_core::pty::output_channel();
+    let session = service
+        .open_shell(owner, "/bin/sh", None, 80, 24, tx)
+        .expect("open a session shell");
+    service
+        .write(
+            &session,
+            soksak_sidecar_alacritty_core::pty::WriteOrigin::Person,
+            &b"printf 'ENV=%s|%s\\n' \"${SOKSAK_SURFACE-unset}\" \"$SOKSAK_CONFIG_DIR\"\n"[..],
+        )
+        .expect("write to the shell");
+    let mut output = String::new();
+    let found = collect_until(&mut rx, &mut output, |output| output.contains(expected)).await;
+    let _ = service.close(&session);
+    (found, output)
+}
+
+// core docs/spec/sidecars.md#processes-of-a-surface: the process of a surface names the surface and the
+// configuration directory, and replaces the values that the environment of the sidecar holds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_shell_names_its_surface_and_config_directory() {
+    let _lock = native_pty_test_lock();
+    let service = service_with_inherited_variables();
+    let owner = ShellOwner {
+        owner: "/fixture/config",
+        surface: "surf-1",
+    };
+    let (found, output) = shell_variables(&service, owner, "ENV=surf-1|/fixture/config\r\n").await;
+    assert!(found, "the session did not name its surface: {output:?}");
+}
+
+// A process that belongs to no surface starts without SOKSAK_SURFACE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_shell_without_a_surface_has_no_surface_variable() {
+    let _lock = native_pty_test_lock();
+    let service = service_with_inherited_variables();
+    let owner = ShellOwner {
+        owner: "/fixture/config",
+        surface: "",
+    };
+    let (found, output) = shell_variables(&service, owner, "ENV=unset|/fixture/config\r\n").await;
+    assert!(
+        found,
+        "the session named a surface it does not belong to: {output:?}"
+    );
 }

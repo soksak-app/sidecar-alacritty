@@ -705,6 +705,7 @@ async fn a_write_waiting_for_the_child_does_not_block_the_runtime() {
             &ShellRequest {
                 shell,
                 directory: None,
+                surface: String::new(),
             },
             80,
             24,
@@ -787,6 +788,7 @@ async fn a_close_ends_a_write_that_waits_for_the_child() {
             &ShellRequest {
                 shell,
                 directory: None,
+                surface: String::new(),
             },
             80,
             24,
