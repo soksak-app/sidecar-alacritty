@@ -28,7 +28,7 @@ export const WORKLOADS = {
 };
 
 /** The step fields of a frame record of a draw, which the draw time `draw_us` holds, and the time of the screen hash. */
-export const STEPS = ["layout_us", "cells_us", "match_us", "paint_us", "compose_us", "rows_drawn", "rows_serialized", "hash_us"];
+export const STEPS = ["layout_us", "cells_us", "match_us", "paint_us", "compose_us", "rows_drawn", "rows_serialized", "targets", "hash_us"];
 
 /** The median of each step of the frame records in the event log text `text` from the time `since` (microseconds). */
 export function stepMedians(text, since) {

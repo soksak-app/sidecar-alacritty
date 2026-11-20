@@ -1,5 +1,6 @@
 # Changelog
 
+- S244: The frame record carries the target of the draw, the count of targets of the pool and the counts of the targets that the host held and that were in use at the selection; the growth of a pool to 7 surfaces was verified as the reuse rule of the pool and closed. Verification: Red of `a_served_surface_records_its_frames_with_reasons` without `targets`, then Green, and `serve_events`, `frame_strip_test` and `frame_test`; in the lease mode the host held 1 target at every draw and pools grew only at draws that found the other targets in use.
 - S243: The lib test target of `soksak-sidecar-alacritty-core` builds: the lifecycle test session names `surface_process: None`, because its child belongs to no surface.
 - S242: A persistent service with a live session exits after `shutdown` once its client has left: the connection no longer waits for the monitors of its sessions, and the sessions drop the sender of the connection that ended (core `docs/spec/persistent-services.md#service-transport`).
 - S241: `open_program_test` covers a relative program without a session directory: the service runs as a child process with its own `HOME`, and the program resolves from that home folder.

@@ -22,6 +22,10 @@ pub struct FrameSteps {
     pub compose_ns: u64,
     pub rows: u32,
     pub serialized: u32,
+    pub target: u32,
+    pub targets: u32,
+    pub targets_held: u32,
+    pub targets_in_use: u32,
 }
 
 #[repr(C)]
