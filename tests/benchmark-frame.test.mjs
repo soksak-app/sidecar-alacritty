@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { WORKLOADS, cpuSeconds, parseArguments } from "../scripts/benchmark-frame.mjs";
+import { STEPS, WORKLOADS, cpuSeconds, parseArguments, stepMedians } from "../scripts/benchmark-frame.mjs";
 
 test("the benchmark reads its arguments and refuses a missing or an unknown value", { timeout: 1000 }, () => {
   const base = ["--service", "/bin/service", "--answer", "leased", "--workload", "statusline"];
@@ -17,6 +17,27 @@ test("the benchmark reads its arguments and refuses a missing or an unknown valu
   assert.throws(() => parseArguments([...base, "--seconds", "0"]), /--seconds must be a positive number, found 0/);
   assert.throws(() => parseArguments([...base, "--rows", "3"]), /unknown argument --rows/);
   assert.throws(() => parseArguments([...base, "--sample"]), /--sample requires a value/);
+  assert.equal(parseArguments([...base, "--steps", "--seconds", "3"]).steps, true);
+  assert.equal(parseArguments([...base, "--steps", "--seconds", "3"]).seconds, 3);
+});
+
+// With --steps the benchmark stores the frame records of the service and reports the median of each step of the draws
+// that the measured interval holds; a frame before the interval and a frame without a raster are not counted.
+test("the benchmark reports the median of each step of the measured frames", { timeout: 1000 }, () => {
+  const frame = (ts, value) => JSON.stringify({ ts_us: ts, event: "sidecar.alacritty.frame",
+    fields: Object.fromEntries([...STEPS, "draw_us"].map((name) => [name, value])) });
+  const lines = [
+    frame(10, 1000),
+    frame(20, 1),
+    frame(30, 3),
+    frame(40, 2),
+    JSON.stringify({ ts_us: 50, event: "sidecar.alacritty.frame", fields: { hash_us: 9 } }),
+    JSON.stringify({ ts_us: 60, event: "sidecar.alacritty.resize", fields: { draw_us: 7 } }),
+  ].join("\n");
+  const medians = stepMedians(lines, 20);
+  assert.equal(medians.frames, 3);
+  for (const name of [...STEPS, "draw_us"]) assert.equal(medians[name], 2, name);
+  assert.throws(() => stepMedians("", 0), /the service stored no frame record with draw steps/);
 });
 
 test("the benchmark reads the CPU time forms of ps", { timeout: 1000 }, () => {

@@ -2238,9 +2238,19 @@ fn shown_frame(image: Option<&ImageState>) -> Value {
     }
 }
 
+/// The draw of a frame into a raster: its time, the times of its steps, the size of the raster in
+/// pixels and the number of the image.
+struct FrameDraw {
+    draw_us: u64,
+    layout_us: u64,
+    steps: crate::platform::darwin::frame::FrameSteps,
+    raster: String,
+    image: u32,
+}
+
 /// Records the frame record of a screen (core docs/spec/replay.md#records): the sequence of the
-/// last input that it includes, its size and its hash. A raster adds the time to draw it, its size
-/// in pixels and its number.
+/// last input that it includes, its size, its hash and the time of the hash. A raster adds the
+/// time to draw it, the times of the steps of the draw, its size in pixels and its number.
 fn record_frame(
     log: &Events,
     surface_id: &str,
@@ -2248,13 +2258,14 @@ fn record_frame(
     screen: &Screen,
     reason: &str,
     sequence: u64,
-    raster: Option<(u64, String, u32)>,
+    raster: Option<FrameDraw>,
 ) {
     // The hash is the cost of a frame record: a record that the policy does not store is not
     // built, and the gate counts the refusal.
     if !log.gate(Class::Frame, Level::Debug) {
         return;
     }
+    let hashed = std::time::Instant::now();
     let hash = match crate::screen_hash::screen_hash(screen) {
         Ok(hash) => hash,
         Err(error) => return log.record_error("frame", error),
@@ -2265,11 +2276,18 @@ fn record_frame(
         "rows": screen.rows,
         "cols": screen.cols,
         "hash": hash,
+        "hash_us": hashed.elapsed().as_micros() as u64,
     });
-    if let Some((draw_us, raster, image)) = raster {
-        fields["draw_us"] = json!(draw_us);
-        fields["raster"] = json!(raster);
-        fields["image"] = json!(image);
+    if let Some(draw) = raster {
+        fields["draw_us"] = json!(draw.draw_us);
+        fields["layout_us"] = json!(draw.layout_us);
+        fields["cells_us"] = json!(draw.steps.cells_ns / 1000);
+        fields["match_us"] = json!(draw.steps.match_ns / 1000);
+        fields["paint_us"] = json!(draw.steps.paint_ns / 1000);
+        fields["compose_us"] = json!(draw.steps.compose_ns / 1000);
+        fields["rows_drawn"] = json!(draw.steps.rows);
+        fields["raster"] = json!(draw.raster);
+        fields["image"] = json!(draw.image);
     }
     log.emit_for(
         Level::Debug,
@@ -2469,7 +2487,9 @@ async fn present_screen(
     }
     let draw_started = std::time::Instant::now();
     let collect_render = collect_render_metadata(log.trace_dir());
+    let mut layout_us = 0;
     let draw = crate::platform::darwin::frame::render_layout(&screen).and_then(|layout| {
+        layout_us = draw_started.elapsed().as_micros() as u64;
         state
             .frame
             .draw_render_layout(
@@ -2516,11 +2536,13 @@ async fn present_screen(
         &screen,
         reason,
         input_sequence,
-        Some((
-            draw_started.elapsed().as_micros() as u64,
-            format!("{}x{}", state.width_px, state.height_px),
-            state.sequence + 1,
-        )),
+        Some(FrameDraw {
+            draw_us: draw_started.elapsed().as_micros() as u64,
+            layout_us,
+            steps: state.frame.steps(),
+            raster: format!("{}x{}", state.width_px, state.height_px),
+            image: state.sequence + 1,
+        }),
     );
     state.sequence += 1;
     let frame = json!({

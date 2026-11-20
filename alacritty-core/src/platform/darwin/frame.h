@@ -118,6 +118,19 @@ Frame* frame_new_strip(uint32_t width_px, uint32_t height_px);
 // Both return -1 for an id that the frame does not have, and frame_release also for a target that is not held.
 int frame_hold(Frame *frame, uint32_t id);
 int frame_release(Frame *frame, uint32_t id);
+// The times of the steps of the last draw, in nanoseconds: the serialization of the configuration and of the cells of each
+// row (cells_ns), the lookup of the strip of each row (match_ns), the CoreGraphics draw of the rows that no strip holds and
+// the copy of their pixels into the store (paint_ns), and the composition of the strips, the inline images and the cursor
+// into the target (compose_ns); rows is the count of rows that the draw drew. A frame without strips draws every cell in
+// paint_ns, and its other steps are 0.
+typedef struct {
+    uint64_t cells_ns;
+    uint64_t match_ns;
+    uint64_t paint_ns;
+    uint64_t compose_ns;
+    uint32_t rows;
+} FrameSteps;
+void frame_steps(Frame *frame, FrameSteps *out);
 #ifdef SOKSAK_DIAGNOSTICS
 // The count of strips that the last draw of a strip frame drew.
 uint32_t frame_strips_drawn(Frame *frame);

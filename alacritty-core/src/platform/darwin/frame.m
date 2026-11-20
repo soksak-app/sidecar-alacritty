@@ -6,6 +6,7 @@
 #include "frame.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 // 글꼴은 CoreText 글꼴 설명 하나를 소유한다.
 struct FrameFont {
@@ -55,6 +56,8 @@ struct Frame {
     // The configuration that the slots were drawn with (a retained NSData) and the count of strips that the last draw drew.
     void *configuration;
     uint32_t strips_drawn;
+    // The step times of the last draw.
+    FrameSteps steps;
     FrameTarget *targets;
     uint32_t target_count;
     uint32_t current;
@@ -938,6 +941,7 @@ static int strip_store_fill(Frame *frame, const uint8_t *rows, uint32_t row_coun
 static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, InlineImageRaster *images, uint32_t image_count,
                           RenderOutput *render_output) {
     if (render_output) return -3;
+    uint64_t started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     // A change of the frame, the font or the default colors empties the store, so every row is drawn again.
     NSMutableData *configuration = [NSMutableData data];
     serialize_append(configuration, &frame->width, sizeof(frame->width));
@@ -972,6 +976,8 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         serialize_append(data, flags, sizeof(flags));
     }
     frame->draws++;
+    uint64_t serialized = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    frame->steps.cells_ns = serialized - started;
     NSMutableArray *slot_cells = (__bridge NSMutableArray *)frame->slot_cells;
     NSMutableData *selection = [NSMutableData dataWithLength:screen->height];
     uint8_t *rows = selection.mutableBytes;
@@ -1007,6 +1013,8 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         rows[row] = 1;
         count++;
     }
+    uint64_t matched = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    frame->steps.match_ns = matched - serialized;
     if (count > 0 || !frame->margin_filled) {
         int result = frame_draw_cg(frame, frame->surface, screen, metrics, NULL, 0, NULL, rows);
         if (result == 0) result = strip_store_fill(frame, rows, screen->height);
@@ -1017,6 +1025,9 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
         }
     }
     frame->strips_drawn = count;
+    frame->steps.rows = count;
+    uint64_t drawn = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    frame->steps.paint_ns = drawn - matched;
 
     // The inline images are composited by the CoreGraphics draw over a copy of the strip pixels under them, so their
     // pixels equal the CoreGraphics frame; frame_compose copies these rectangles over the strips.
@@ -1049,6 +1060,7 @@ static int frame_draw_strips(Frame *frame, Screen *screen, Metrics *metrics, Inl
     }
     int composed = frame_compose(frame, rects);
     if (composed != 0) return composed;
+    frame->steps.compose_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - drawn;
     return 0;
 }
 
@@ -1112,10 +1124,19 @@ int frame_draw_with_inline_images(Frame *frame, Screen *screen, Metrics *metrics
     // The caller is a thread without an autorelease pool, so the objects that a draw autoreleases are released when it
     // returns instead of at the end of the thread: -bytes of an NSMutableData autoreleases the data, and a strip draw reads
     // the bytes of each serialized row.
+    frame->steps = (FrameSteps){0};
     @autoreleasepool {
         if (frame->strip) return frame_draw_strips(frame, screen, metrics, images, image_count, render_output);
-        return frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+        uint64_t started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        int result = frame_draw_cg(frame, frame->surface, screen, metrics, images, image_count, render_output, NULL);
+        frame->steps.paint_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started;
+        frame->steps.rows = screen->height;
+        return result;
     }
+}
+
+void frame_steps(Frame *frame, FrameSteps *out) {
+    *out = frame->steps;
 }
 
 void frame_drop(Frame *frame) {
