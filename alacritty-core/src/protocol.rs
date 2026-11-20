@@ -2686,6 +2686,8 @@ struct ScrollRead {
     /// Whether a read frame request waits for its tick.
     wanted: bool,
     refresh_rate: Option<u64>,
+    /// The sink bound to the request of the read, so that each reply of the read answers that request and carries its `cids`.
+    reply: OutputSink,
 }
 
 /// The plain text of each row of `screen`: the characters of the cells of a width other than 0, without the spaces at its end.
@@ -4481,9 +4483,9 @@ async fn surface_task(
                             }
                     }
                     SurfaceCommand::ImageDetach { detach, request_check } => {
-                        if scroll_read.take().is_some() {
+                        if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadFailed", "the image region was detached during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         let current = [
                             image_state
@@ -4783,9 +4785,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::InputTransaction { actions, preedit: next_preedit, cids, request } => {
-                        if scroll_read.take().is_some() {
+                        if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the input request of the person reached the session during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         last_input = Some(Instant::now());
                         let modes = engine.modes();
@@ -4871,9 +4873,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Paste { text, cids } => {
-                        if scroll_read.take().is_some() {
+                        if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the paste request of the person reached the session during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         last_input = Some(Instant::now());
                         cursor_activity = Instant::now();
@@ -4926,9 +4928,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Mouse { input_id, phase, x, y, pressed, shift, alt, ctrl, cids } => {
-                        if matches!(phase, MousePhase::Down) && scroll_read.take().is_some() {
+                        if matches!(phase, MousePhase::Down) && let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the mouse request of the person reached the session during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         let modes = engine.modes();
                         let cell = match image_state.as_ref()
@@ -5142,9 +5144,9 @@ async fn surface_task(
                         }
                     }
                     SurfaceCommand::Viewport { offset } => {
-                        if scroll_read.take().is_some() {
+                        if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the viewport request of the person reached the session during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         // Limits the viewport to the range of history that the engine retains.
                         let delta = i64::from(offset) - i64::from(engine.viewport_offset());
@@ -5158,9 +5160,9 @@ async fn surface_task(
                             && !present_screen(&surface_id, screen, state, &output_tx, "viewport", &log, inputs.sequence).await { return; }
                     }
                     SurfaceCommand::Scroll { lines, col, row, shift, cids } => {
-                        if scroll_read.take().is_some() {
+                        if let Some(read) = scroll_read.take() {
                             let response = scroll_read_error(&surface_id, "scrollReadInterrupted", "the scroll request of the person reached the session during the scroll read".to_string());
-                            if output_tx.reply(response).await.is_err() { return; }
+                            if read.reply.reply(response).await.is_err() { return; }
                         }
                         let modes = engine.modes();
                         // Applies, in this order: mouse reporting unless Shift is held, the alternate
@@ -5424,7 +5426,7 @@ async fn surface_task(
                         if let Some(ref sid) = session_id
                             && !inputs.write(&session_port, sid, &bytes, &[], AfterWrite::Scroll(output_tx.clone(), json!(surface_id))).await { return; }
                         let mut read = ScrollRead {
-                            by, quiet, route, first, after: None, opened: engine.synchronized_opened(), quiet_ticks: 0, synced: false, wanted: false, refresh_rate: None,
+                            by, quiet, route, first, after: None, opened: engine.synchronized_opened(), quiet_ticks: 0, synced: false, wanted: false, refresh_rate: None, reply: output_tx.clone(),
                         };
                         if let Some(state) = image_state.as_ref()
                             && !request_read_frame(&surface_id, state, &mut read, &output_tx).await { return; }
@@ -5546,9 +5548,9 @@ async fn surface_task(
                                     Ok(Some(bytes)) => bytes,
                                     Ok(None) => unreachable!("a scroll read on the viewport route waits for no tick"),
                                     Err(error) => {
-                                        scroll_read = None;
+                                        let read = scroll_read.take().expect("the scroll read of this tick");
                                         let response = scroll_read_error(&surface_id, "scrollReadFailed", format!("the scroll back was not sent: {error}"));
-                                        if output_tx.reply(response).await.is_err() { return; }
+                                        if read.reply.reply(response).await.is_err() { return; }
                                         continue;
                                     }
                                 };
@@ -5569,7 +5571,7 @@ async fn surface_task(
                             if !restored {
                                 body["first"] = json!({"before": read.first.first(), "after": text.first()});
                             }
-                            if output_tx.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
+                            if read.reply.reply(json!({"surface": surface_id, "body": body})).await.is_err() { return; }
                             continue;
                         }
                         if let Some(want) = image_obj.and_then(|o| o.get("want")) {
@@ -5580,9 +5582,9 @@ async fn surface_task(
                             if let Some(state) = image_state.as_mut() {
                                 state.frame_wanted = false;
                             }
-                            if want.get("purpose").and_then(Value::as_str) == Some("read") && scroll_read.take().is_some() {
+                            if want.get("purpose").and_then(Value::as_str) == Some("read") && let Some(read) = scroll_read.take() {
                                 let response = scroll_read_error(&surface_id, "scrollReadFailed", format!("the host refused the read frame request: {want}"));
-                                if output_tx.reply(response).await.is_err() { return; }
+                                if read.reply.reply(response).await.is_err() { return; }
                             }
                             continue;
                         }
@@ -5790,9 +5792,9 @@ async fn surface_task(
                     DaemonEvent::Exit { session_id: ref recv_sid } => {
                         if let Some(ref sid) = session_id
                             && recv_sid == sid {
-                                if scroll_read.take().is_some() {
+                                if let Some(read) = scroll_read.take() {
                                     let response = scroll_read_error(&surface_id, "scrollReadFailed", "the session ended during the scroll read".to_string());
-                                    if output_tx.reply(response).await.is_err() { return; }
+                                    if read.reply.reply(response).await.is_err() { return; }
                                 }
                                 if !inputs.finish_all_writes().await { return; }
                                 session_ended = true;
