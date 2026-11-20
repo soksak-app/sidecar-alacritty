@@ -1,5 +1,6 @@
 # Changelog
 
+- S249: `messages.notice`가 받는 surface의 완료 notice를 보낸 쪽 folder에 `<surface>.notice-<answers>.txt`로 쓴다. Text는 core docs/spec/messaging.md#completion-notice의 것이며, message의 쓰기 규칙을 따른다. 잘못된 parameter, 보낸 쪽 folder가 없는 경우, 등록되지 않은 surface는 파일 없이 거부한다. 영수증 file은 받는 folder의 일반 message로 읽히므로 sidecar 변경이 필요 없다. 검증: `alacritty-core/tests/serve_contract.rs`의 `messages_notice_*` 계약 test에서 Red 뒤 Green, 전체 `soksak-sidecar-alacritty-core` suite.
 - S248: `compose_rects_equal`이 `return NO` 대신 field마다 계산한 값 하나를 반환하므로 kit 0.0.16의 event source 검사가 reason 없는 error return을 찾지 않고, strip 복사의 오래된 comment가 제거된다. Red: 검사가 956행과 961행을 보고했다. Green: 통과하고 frame strip test가 통과한다.
 - S247: shell state unit test는 실패한 command 다음의 `idle` state가 S232가 정의하는 대로 exit code를 유지한다고 기대한다. Red: test가 `exit: Some(3)`와 `exit: None`으로 실패했다. Green: 통과한다.
 - S246: version은 0.0.8이고 kit pin은 kit release 0.0.16이므로, tag v0.0.7 이후의 commit을 release run이 v0.0.8로 게시한다.

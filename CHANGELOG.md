@@ -1,5 +1,6 @@
 # Changelog
 
+- S249: `messages.notice` writes the completion notice of a receiving surface into the folder of its sender as `<surface>.notice-<answers>.txt`, with the text of core docs/spec/messaging.md#completion-notice, by the write rule of a message; invalid parameters, a missing sender folder and an unregistered surface are refused with no file. A receipt file of the receiving folder is read as an ordinary message, so the sidecar needs no change for it. Verification: Red then Green of the `messages_notice_*` contract tests in `alacritty-core/tests/serve_contract.rs`, and the full `soksak-sidecar-alacritty-core` suite.
 - S248: `compose_rects_equal` returns one value that it computes field by field instead of `return NO`, so the event source check of the kit 0.0.16 finds no error return without a reason, and the stale comment of the strip copy is removed. Red: the check reported lines 956 and 961. Green: it passes, and the frame strip tests pass.
 - S247: The shell state unit test expects the `idle` state after a failed command to keep its exit code, as S232 defines. Red: the test failed with `exit: Some(3)` against `exit: None`. Green: it passes.
 - S246: The version is 0.0.8, and the kit pin is the kit release 0.0.16, so the release run publishes the commits after the tag v0.0.7 as v0.0.8.

@@ -1443,6 +1443,10 @@ enum SurfaceCommand {
     MessagesRegister {
         folder: String,
     },
+    /// `messages.notice` with its validated parameters (core docs/spec/messaging.md#completion-notice).
+    MessagesNotice {
+        notice: messaging::Notice,
+    },
     /// `messages.read`, or `messages.wait` when `wait` is set (core docs/spec/messaging.md#mcp-tools).
     MessagesRead {
         after: u64,
@@ -4663,6 +4667,16 @@ async fn surface_task(
                         };
                         if output_tx.reply(response).await.is_err() { return; }
                     }
+                    SurfaceCommand::MessagesNotice { notice } => {
+                        let response = match messages.as_ref() {
+                            Some(current) => match current.notice(&surface_id, &notice) {
+                                Ok(path) => json!({"surface": surface_id, "body": {"path": path}}),
+                                Err(refusal) => json!({"surface": surface_id, "body": refusal.body()}),
+                            },
+                            None => json!({"surface": surface_id, "body": {"error": "unknown-terminal", "reason": format!("the surface {surface_id} holds no registration")}}),
+                        };
+                        if output_tx.reply(response).await.is_err() { return; }
+                    }
                     SurfaceCommand::MessagesRead { after, registration, wait } => {
                         let Some(current) = messages.as_ref() else {
                             let response = json!({"surface": surface_id, "body": {"error": "unknown-terminal", "reason": format!("the surface {surface_id} holds no registration")}});
@@ -7238,6 +7252,24 @@ where
                                     break;
                                 }
                             }
+                            "messages.notice" => match messaging::Notice::from_body(&body) {
+                                Ok(notice) => {
+                                    if tx
+                                        .send(SurfaceCommand::MessagesNotice { notice })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(refusal) => {
+                                    let response =
+                                        json!({"surface": surface_id, "body": refusal.body()});
+                                    if reply_tx.reply(response).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            },
                             "messages.read" | "messages.wait" => {
                                 let cursor = parse_message_cursor(&body);
                                 let (after, registration) = match cursor {
