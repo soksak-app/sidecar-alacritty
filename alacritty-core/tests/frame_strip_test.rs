@@ -608,3 +608,48 @@ fn the_draws_of_a_frame_create_the_paint_objects_once() {
         "a later draw with the same font and colors on the same target creates nothing"
     );
 }
+
+// A draw serializes only the rows whose cells differ from the rows of the previous draw of the frame (S237): the other rows
+// keep their strips, and the pixels equal those of a CoreGraphics frame.
+#[test]
+fn a_draw_serializes_only_the_changed_rows() {
+    let metrics = metrics(13.0, 1.0);
+    let (width, height) = (
+        metrics.cell_width as u32 * 6,
+        metrics.cell_height as u32 * 3,
+    );
+    let strip = Frame::new_strip(width, height).expect("strip frame");
+    let coregraphics = Frame::new(width, height).expect("frame");
+    let theme = TerminalTheme::dark();
+    let mut screen = text_screen();
+    let cursor = cursor_render(CursorShape::Block);
+    strip
+        .draw_with_theme(&screen, &metrics, cursor, &theme)
+        .expect("first draw");
+    assert_eq!(
+        strip.steps().serialized,
+        3,
+        "the first draw serializes every row"
+    );
+    screen.lines[1][2].ch = Some("#".into());
+    strip
+        .draw_with_theme(&screen, &metrics, cursor, &theme)
+        .expect("changed draw");
+    assert_eq!(
+        strip.steps().serialized,
+        1,
+        "a draw serializes the one changed row"
+    );
+    strip
+        .draw_with_theme(&screen, &metrics, cursor, &theme)
+        .expect("same draw");
+    assert_eq!(
+        strip.steps().serialized,
+        0,
+        "an unchanged screen serializes no row"
+    );
+    coregraphics
+        .draw_with_theme(&screen, &metrics, cursor, &theme)
+        .expect("coregraphics draw");
+    assert_same_pixels(&coregraphics, &strip, width, height, "the kept rows");
+}
