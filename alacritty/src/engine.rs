@@ -1530,9 +1530,14 @@ impl AlacrittyEngine {
     }
 
     /// The rows `from` to `from + count` of the primary screen and its history, in the absolute
-    /// numbering of `absolute`.
+    /// numbering of `absolute`; while the alternate screen is active, the primary grid is the
+    /// inactive grid of the terminal, read by a borrow.
     fn primary_rows(&self, from: u64, count: u32) -> Result<Vec<Vec<Cell>>, String> {
-        let grid = self.term.grid();
+        let grid = if self.primary_screen() {
+            self.term.grid()
+        } else {
+            self.term.inactive_grid()
+        };
         // Absolute numbering of `absolute`: the rows dropped past the history limit are counted, so
         // the oldest kept row is `dropped`. `dropped` is never negative.
         let first = self.dropped as u64;
@@ -2530,10 +2535,6 @@ impl Engine for AlacrittyEngine {
         count: u32,
     ) -> Result<Vec<Vec<Cell>>, String> {
         match screen {
-            RowScreen::Primary if !self.primary_screen() => Err(
-                "screen.read primary rows are not readable while the alternate screen is active"
-                    .to_string(),
-            ),
             RowScreen::Primary => self.primary_rows(from, count),
             RowScreen::Alternate => self.kept_alternate_rows(from, count),
         }
