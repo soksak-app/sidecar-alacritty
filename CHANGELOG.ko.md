@@ -1,6 +1,8 @@
 # Changelog
 
 - S243: `soksak-sidecar-alacritty-core`의 lib test target이 빌드된다. lifecycle test session이 `surface_process: None`을 명시한다. 이 child는 어떤 surface에도 속하지 않기 때문이다.
+- S242: live session이 있는 상주 service는 client가 떠난 뒤 `shutdown`으로 끝난다. 연결은 session의 monitor를 기다리지 않고, 끝난 연결의 sender는 session이 보관하지 않는다(core `docs/spec/persistent-services.md#service-transport`).
+- S241: `open_program_test`는 session 디렉터리가 없는 상대 프로그램을 다룬다. service는 자신의 `HOME`을 가진 child 프로세스로 실행되고, 프로그램은 그 home 폴더에서 찾는다.
 - S241: `open` 요청이 `program`과 `args`를 받는다. `program`이 있는 세션은 그 프로그램을 인자와 함께 셸 없이 시작하고, 구분자가 있는 상대 경로는 세션 디렉터리에서, 구분자가 없는 이름은 PATH에서 찾으며, 잘못된 값과 없는 프로그램은 명시적 오류로 실패한다(`docs/spec/alacritty-core.md#terminal-session-start`). 검증: 바뀌지 않은 사이드카에서 `open_program_test`의 Red(open이 `open requires a shell`로 답함), 그 뒤 `open_program_test`, `pty_lifecycle`, clippy의 Green.
 - S235: sidecar가 core `docs/spec/sidecars.md#process-identity`의 process query에 답한다. 서비스는 각 세션 shell의 surface와 시작 시각을 기록하고, `{process, request, surface, started}`나 surface `null`로 답하며, `sidecar.json`은 `processes`를 선언한다(`docs/spec/alacritty-core.md#process-queries`). 검증: 바뀌지 않은 sidecar에서 `process_query_test`의 Red(세션 process의 query에 답 없음), 그 뒤 `process_query_test`와 `pty_lifecycle`의 Green.
 - S237: strip frame은 마지막 그리기의 그 행과 cell이 다른 행만 직렬화하고 조회하며 다른 행의 strip을 그대로 두고, frame 기록은 `rows_serialized`를 지닌다. 검증: 바뀐 행 하나에 직렬화한 행 3개로 `a_draw_serializes_only_the_changed_rows`의 Red, 그 뒤 1개로 Green, `frame_strip_test`, `frame_test`, `inline_image_test`, `frame_memory_test`, `serve_events`, `serve_contract`. `make benchmark-frame WORKLOAD=statusline STEPS=1`의 `cells_us` 중앙값이 221–365에서 19–34 µs로 줄었다.
