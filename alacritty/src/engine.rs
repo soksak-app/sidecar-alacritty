@@ -1448,9 +1448,6 @@ impl AlacrittyEngine {
     /// grid without history, so that its viewport and its scrollbar stay as the library keeps them.
     fn keep_alternate_rows(&mut self) {
         let history = self.term.grid().history_size();
-        if history == 0 {
-            return;
-        }
         if history >= COUNTED_ROWS {
             self.events.push(QueuedEvent::Neutral(EngineEvent::Error(format!(
                 "one input pushed {COUNTED_ROWS} or more rows above the alternate screen, so kept rows may be missing"
@@ -1460,7 +1457,14 @@ impl AlacrittyEngine {
             .rev()
             .map(|above| self.grid_row(Line(-above)))
             .collect();
+        // The limit returns to zero also after a slice that pushed no row: a resize of an alternate
+        // grid with a history limit moves the rows that a smaller height cuts off into its history
+        // and a larger height moves them back onto the screen, which a terminal without alternate
+        // history does not do (S215).
         self.term.grid_mut().update_history(0);
+        if history == 0 {
+            return;
+        }
         self.alternate_kept.extend(rows);
         let excess = self.alternate_kept.len().saturating_sub(self.history_limit);
         if excess > 0 {
