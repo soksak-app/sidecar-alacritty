@@ -1,5 +1,6 @@
 # Changelog
 
+- S248: `compose_rects_equal`이 `return NO` 대신 field마다 계산한 값 하나를 반환하므로 kit 0.0.16의 event source 검사가 reason 없는 error return을 찾지 않고, strip 복사의 오래된 comment가 제거된다. Red: 검사가 956행과 961행을 보고했다. Green: 통과하고 frame strip test가 통과한다.
 - S247: shell state unit test는 실패한 command 다음의 `idle` state가 S232가 정의하는 대로 exit code를 유지한다고 기대한다. Red: test가 `exit: Some(3)`와 `exit: None`으로 실패했다. Green: 통과한다.
 - S246: version은 0.0.8이고 kit pin은 kit release 0.0.16이므로, tag v0.0.7 이후의 commit을 release run이 v0.0.8로 게시한다.
 - S245: pre-push hook이 돌리는 `make check-push`가 `cargo fmt --all --check`를 돌리므로, format되지 않은 Rust source의 push는 main에 닿기 전에 거부된다. 검증: `tests/make-targets.test.mjs`의 `make check-push` test의 Red와 format되지 않은 줄을 둔 commit에서 통과한 `make check-push`, 그 뒤 test의 Green, 그 commit에서 실패한 `make check-push`, 되돌린 뒤 통과한 `make check-push`.

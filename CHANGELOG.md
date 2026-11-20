@@ -1,5 +1,6 @@
 # Changelog
 
+- S248: `compose_rects_equal` returns one value that it computes field by field instead of `return NO`, so the event source check of the kit 0.0.16 finds no error return without a reason, and the stale comment of the strip copy is removed. Red: the check reported lines 956 and 961. Green: it passes, and the frame strip tests pass.
 - S247: The shell state unit test expects the `idle` state after a failed command to keep its exit code, as S232 defines. Red: the test failed with `exit: Some(3)` against `exit: None`. Green: it passes.
 - S246: The version is 0.0.8, and the kit pin is the kit release 0.0.16, so the release run publishes the commits after the tag v0.0.7 as v0.0.8.
 - S245: `make check-push`, which the pre-push hook runs, runs `cargo fmt --all --check`, so a push of an unformatted Rust source is refused before it reaches main. Verification: Red of the `make check-push` test of `tests/make-targets.test.mjs` and a passing `make check-push` on a commit with an unformatted line, then Green of the test, a failing `make check-push` on that commit and a passing one after its revert.

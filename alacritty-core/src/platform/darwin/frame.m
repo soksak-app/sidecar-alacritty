@@ -949,19 +949,15 @@ static void serialize_append(NSMutableData *data, const void *bytes, size_t leng
     [data appendBytes:bytes length:length];
 }
 
-// Copies the strips of the rows and the margin into the target surface and applies the rectangles. Returns -1 when a
-// surface does not lock.
 // Whether two lists of rectangles name the same rectangles field by field; the padding of a ComposeRect is not compared.
 static BOOL compose_rects_equal(NSData *left, NSData *right) {
-    if (!left || left.length != right.length) return NO;
+    BOOL equal = left && left.length == right.length;
     const ComposeRect *a = left.bytes, *b = right.bytes;
-    for (NSUInteger i = 0; i < left.length / sizeof(ComposeRect); i++) {
-        if (a[i].left != b[i].left || a[i].top != b[i].top || a[i].right != b[i].right || a[i].bottom != b[i].bottom ||
-            a[i].kind != b[i].kind || memcmp(a[i].bgr, b[i].bgr, 3) != 0) {
-            return NO;
-        }
+    for (NSUInteger i = 0; equal && i < left.length / sizeof(ComposeRect); i++) {
+        equal = a[i].left == b[i].left && a[i].top == b[i].top && a[i].right == b[i].right && a[i].bottom == b[i].bottom &&
+                a[i].kind == b[i].kind && memcmp(a[i].bgr, b[i].bgr, 3) == 0;
     }
-    return YES;
+    return equal;
 }
 
 // Marks the row bands, and the margin, that the rectangles cover.
