@@ -13,7 +13,7 @@ use events_test::TestEvents;
 // frame.
 use soksak_sidecar_alacritty_core::policy::{Class, Policy};
 use soksak_sidecar_alacritty_core::protocol::{
-    Cursor, CursorShape, Engine, EngineEvent, Foreground, Modes, Screen, SessionPort, ShellRequest,
+    Cursor, CursorShape, Engine, EngineEvent, Modes, Screen, SessionPort, ShellRequest,
     make_default_session_port_factory, serve,
 };
 use std::sync::Arc;
@@ -170,9 +170,16 @@ struct TracePort;
 
 #[async_trait::async_trait]
 impl SessionPort for TracePort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
+        &self,
+        _session_id: &str,
+    ) -> Result<soksak_sidecar_alacritty_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_alacritty_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -592,9 +599,16 @@ struct OutputPort(
 
 #[async_trait::async_trait]
 impl SessionPort for OutputPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
+        &self,
+        _session_id: &str,
+    ) -> Result<soksak_sidecar_alacritty_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_alacritty_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -1078,9 +1092,16 @@ struct FailingOpenPort;
 
 #[async_trait::async_trait]
 impl SessionPort for FailingOpenPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
+        &self,
+        _session_id: &str,
+    ) -> Result<soksak_sidecar_alacritty_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_alacritty_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(
@@ -1638,9 +1659,16 @@ struct HeldOpenPort(Arc<tokio::sync::Semaphore>);
 
 #[async_trait::async_trait]
 impl SessionPort for HeldOpenPort {
-    /// This port has no terminal, so no process holds its foreground.
-    fn foreground(&self, _session_id: &str) -> Result<Option<Foreground>, String> {
-        Ok(None)
+    /// This port has no terminal, so its process list holds no process.
+    fn processes(
+        &self,
+        _session_id: &str,
+    ) -> Result<soksak_sidecar_alacritty_core::process_list::Processes, String> {
+        Ok(soksak_sidecar_alacritty_core::process_list::Processes {
+            foreground: None,
+            background: Vec::new(),
+            watched: Vec::new(),
+        })
     }
 
     async fn open(

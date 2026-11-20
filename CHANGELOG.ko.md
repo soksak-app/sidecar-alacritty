@@ -1,5 +1,6 @@
 # Changelog
 
+- S224: sidecar 가 core `docs/spec/process-list.md` 의 terminal 의 process list 를 보낸다. 이벤트 `processes {foreground, background}` 가 foreground program 과 background job 을 이름하며, 각각 `{group, pid, command, arguments, cwd, started}` 이고 job 은 `state` 를 가진다. 각 출력 뒤와 job 의 각 끝, 실행, signal 에, terminal 에 setuid program 이 있을 때도 보내고, 실패한 읽기에는 `processes {error}` 를 한 번 보낸다. `process.list` 는 같은 list 로 답한다. 이벤트 `foreground` 는 없어졌다.
 - S215: alternate screen 의 resize 가 더 이상 이전 render 의 행을 되돌리지 않는다. engine 이 출력의 slice 마다 alternate grid 의 history 한도를 0 으로 되돌리므로 `alacritty_terminal` 처럼 작은 높이는 행을 잘라내고 큰 높이는 빈 행을 더한다. S205-2 가 scroll 없는 slice 뒤에 grid 에 남긴 한도가 잘린 행을 full-screen program 의 화면으로 되돌렸다.
 - S207: engine 이 답하는 OSC 질의(OSC 5, 17, 19)의 답이 같은 출력에서 그 앞의 질의의 답 뒤에 오고, 그런 OSC 의 다른 이벤트도 그 앞의 출력의 이벤트 뒤에 온다. engine 은 OSC 에 대해 행동하기 전에 OSC 의 끝까지의 출력을 library 에 넘긴다.
 - S210: scroll 읽기의 각 답이 자기 요청에 답하고 그 `cids` 를 담는다. tick 에서의 답과 읽기를 끝내는 오류는 그것을 끝낸 명령의 sink 로 갔다.
