@@ -1,5 +1,6 @@
 # Changelog
 
+- S252: The version is 0.0.10, so the release run publishes the main of the repository as v0.0.10; it holds the same sources as v0.0.9.
 - S251: The version is 0.0.9, so the release run publishes the commits after the tag v0.0.8 as v0.0.9, which hold S249 (`messages.notice`) and the process list rows of S225.
 - S205: The checklist marks S205 complete, whose items S205-1 to S205-5 are complete.
 - S225: The release row is complete: the release v0.0.8 contains the process list of S224.
