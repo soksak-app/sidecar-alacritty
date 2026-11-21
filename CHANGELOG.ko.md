@@ -1,5 +1,6 @@
 # Changelog
 
+- S251: 버전이 0.0.9이므로 release run이 tag v0.0.8 뒤의 커밋을 v0.0.9로 낸다. S249(`messages.notice`)과 S225의 process list 행을 담는다.
 - S205: 체크리스트가 S205를 완료로 표시한다. 그 항목 S205-1부터 S205-5까지 완료되었다.
 - S225: release 행이 완료되었다. release v0.0.8 이 S224 의 process list 를 담는다.
 - S250: 정책 파일과 `endpoint.json` 감시를 직접 작성한 kqueue에서 crate `notify`로 옮기는 일을 등록한다. 이 행은 endpoint 종료 이유 행이 이미 쓰는 ID S189로 쓰여 있었다.

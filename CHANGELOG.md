@@ -1,5 +1,6 @@
 # Changelog
 
+- S251: The version is 0.0.9, so the release run publishes the commits after the tag v0.0.8 as v0.0.9, which hold S249 (`messages.notice`) and the process list rows of S225.
 - S205: The checklist marks S205 complete, whose items S205-1 to S205-5 are complete.
 - S225: The release row is complete: the release v0.0.8 contains the process list of S224.
 - S250: Registers the move of the policy file and `endpoint.json` watch from the hand-written kqueue to the crate `notify`; the row was written under the ID S189, which the endpoint exit reason row already holds.
