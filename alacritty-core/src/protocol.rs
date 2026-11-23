@@ -5217,6 +5217,9 @@ async fn surface_task(
                                     "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                     "bytes": null, "error": format!("invalidParams: {reason}")
                                 }});
+                                // The result waits for the queued writes of earlier inputs, so that
+                                // the mouse results keep the order of the inputs.
+                                if !inputs.finish_all_writes().await { return; }
                                 if output_tx.reply(response).await.is_err() { return; }
                                 continue;
                             }
@@ -5270,6 +5273,7 @@ async fn surface_task(
                                             if !inputs.write(&session_port, sid, &bytes, &cids, AfterWrite::Mouse(output_tx.clone(), response)).await { return; }
                                         }
                                         None => {
+                                            if !inputs.finish_all_writes().await { return; }
                                             if output_tx.send(response.to_string()).await.is_err() { return; }
                                         }
                                     }
@@ -5280,6 +5284,7 @@ async fn surface_task(
                                         "reported": true, "written": false,
                                         "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                         "bytes": null, "error": reason}});
+                                    if !inputs.finish_all_writes().await { return; }
                                     if output_tx.reply(response).await.is_err() { return; }
                                 }
                             }
@@ -5300,6 +5305,7 @@ async fn surface_task(
                                 "modes": {"click": modes.mouse_click, "drag": modes.mouse_drag, "motion": modes.mouse_motion},
                                 "bytes": null, "error": null
                             }});
+                            if !inputs.finish_all_writes().await { return; }
                             if output_tx.reply(response).await.is_err() { return; }
                         }
                     }
