@@ -1,5 +1,6 @@
 # Changelog
 
+- S256: version은 0.0.12이며 release run이 S255를 게시한다.
 - S255: line guard는 삽입 텍스트의 control character를 해당 키로 읽는다(core F1135).
 - S254: 버전이 0.0.11이므로 release run이 tag v0.0.10 뒤의 커밋을 v0.0.11로 내며, S253을 담는다.
 - S253: 바로 보내는 mouse 결과가 앞선 input의 대기 중인 write를 기다리므로 mouse 결과가 input 순서를 지킨다. 검증: move 결과가 down 결과보다 먼저인 S253 test의 Red 후 `serve_contract.rs` mouse test Green.
