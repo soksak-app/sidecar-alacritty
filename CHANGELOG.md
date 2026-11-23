@@ -1,5 +1,6 @@
 # Changelog
 
+- S254: The version is 0.0.11, so the release run publishes the commits after the tag v0.0.10 as v0.0.11, which hold S253.
 - S253: An immediate mouse result waits for the queued writes of earlier inputs, so the mouse results keep the order of their inputs. Verification: Red of the S253 test with the move result before the down result, then Green of the mouse tests of `serve_contract.rs`.
 - S252: The version is 0.0.10, so the release run publishes the main of the repository as v0.0.10; it holds the same sources as v0.0.9.
 - S251: The version is 0.0.9, so the release run publishes the commits after the tag v0.0.8 as v0.0.9, which hold S249 (`messages.notice`) and the process list rows of S225.
