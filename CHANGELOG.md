@@ -1,5 +1,6 @@
 # Changelog
 
+- S257: A reconnect releases the requested image of the earlier client with its image state and leaves the surface headless, so the background session of a hidden tab opens the surface after an application restart instead of being refused with `imageAttached` (core F1161).
 - S256: The version is 0.0.12, so the release run publishes S255.
 - S255: The line guard reads a control character of inserted text as its key (core F1135).
 - S254: The version is 0.0.11, so the release run publishes the commits after the tag v0.0.10 as v0.0.11, which hold S253.

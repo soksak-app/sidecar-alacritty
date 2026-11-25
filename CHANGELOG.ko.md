@@ -1,5 +1,6 @@
 # Changelog
 
+- S257: Reconnect가 이전 client의 image 상태와 함께 요청 image도 놓고 surface를 headless로 남긴다. 그래서 application 재시작 뒤 숨은 tab의 background session이 `imageAttached`로 거부되지 않고 surface를 연다(core F1161).
 - S256: version은 0.0.12이며 release run이 S255를 게시한다.
 - S255: line guard는 삽입 텍스트의 control character를 해당 키로 읽는다(core F1135).
 - S254: 버전이 0.0.11이므로 release run이 tag v0.0.10 뒤의 커밋을 v0.0.11로 내며, S253을 담는다.
